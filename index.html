@@ -1,0 +1,951 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<title>BLOCKY ROLL — Roll the ball to the portal</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body {
+    width: 100%; height: 100%; overflow: hidden;
+    background: #1b1b24; cursor: crosshair;
+    font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+    -webkit-tap-highlight-color: transparent; touch-action: none;
+  }
+  #game { display: block; position: fixed; inset: 0; }
+
+  #hud {
+    position: fixed; top: 0; left: 0; right: 0; padding: 14px 16px;
+    display: flex; flex-direction: column; align-items: center; gap: 8px;
+    pointer-events: none; z-index: 5;
+  }
+  #toprow { display: flex; align-items: center; gap: 10px; }
+  .chip {
+    background: rgba(12,14,20,.72); border: 2px solid rgba(0,0,0,.55);
+    box-shadow: inset 0 -3px 0 rgba(0,0,0,.35), inset 0 2px 0 rgba(255,255,255,.12);
+    color: #f4f4e8; font-size: 12px; font-weight: 700; letter-spacing: 1.6px;
+    text-transform: uppercase; padding: 7px 12px; border-radius: 3px;
+    text-shadow: 2px 2px 0 rgba(0,0,0,.6);
+  }
+  .chip b { color: #ffe57a; }
+  #barwrap {
+    width: min(62vw, 520px); height: 14px; background: rgba(12,14,20,.72);
+    border: 2px solid rgba(0,0,0,.6); border-radius: 3px; padding: 2px;
+    box-shadow: inset 0 2px 0 rgba(0,0,0,.4);
+  }
+  #fill {
+    height: 100%; width: 0%; border-radius: 1px;
+    background: linear-gradient(180deg, #a6f56a, #57a52c 60%, #3d7a1e);
+    box-shadow: inset 0 2px 0 rgba(255,255,255,.35);
+    transition: width .08s linear;
+  }
+
+  #hint {
+    position: fixed; left: 50%; bottom: 22px; transform: translateX(-50%);
+    color: #fff; font-size: 11px; letter-spacing: 1.6px; text-transform: uppercase;
+    background: rgba(12,14,20,.7); padding: 9px 14px; border-radius: 3px;
+    border: 2px solid rgba(0,0,0,.55); text-shadow: 2px 2px 0 rgba(0,0,0,.6);
+    pointer-events: none; z-index: 5; text-align: center; line-height: 1.7;
+    transition: opacity .5s ease; white-space: nowrap;
+  }
+  #hint.dim { opacity: .28; }
+
+  #center {
+    position: fixed; inset: 0; display: flex; flex-direction: column;
+    align-items: center; justify-content: center; gap: 16px; z-index: 6;
+    text-align: center; padding: 24px; pointer-events: none;
+    background: radial-gradient(circle at 50% 45%, rgba(6,8,14,.55), rgba(6,8,14,.85));
+    opacity: 1; transition: opacity .35s ease;
+  }
+  #center.hidden { opacity: 0; }
+  #center h1 {
+    font-size: clamp(26px, 6.5vw, 58px); color: #fff; letter-spacing: 3px;
+    text-transform: uppercase; font-weight: 800; line-height: 1.15;
+    text-shadow: 0 4px 0 #2f4a1c, 0 8px 0 rgba(0,0,0,.45), 0 0 40px rgba(160,240,120,.35);
+  }
+  #center h1 span { color: #ffe57a; }
+  #center p {
+    font-size: clamp(11px, 2.4vw, 14px); color: #cfd8c5; letter-spacing: 2px;
+    text-transform: uppercase; line-height: 2; max-width: 620px;
+  }
+  #center p b { color: #a6f56a; }
+  #center .key {
+    display: inline-block; border: 2px solid #7d8a70; border-bottom-width: 4px;
+    border-radius: 3px; padding: 2px 7px; margin: 0 2px; color: #fff;
+    background: rgba(255,255,255,.07); font-size: .95em;
+  }
+  #startbtn {
+    pointer-events: auto; cursor: pointer; margin-top: 6px;
+    font-family: inherit; font-weight: 800; font-size: 14px; letter-spacing: 2px;
+    text-transform: uppercase; color: #16240c; padding: 14px 30px;
+    background: linear-gradient(180deg, #b6f97c, #6dc235); border: 2px solid #33531b;
+    border-radius: 4px; box-shadow: 0 6px 0 #33531b, 0 10px 20px rgba(0,0,0,.4);
+    transition: transform .07s ease, box-shadow .07s ease;
+  }
+  #startbtn:active { transform: translateY(4px); box-shadow: 0 2px 0 #33531b; }
+  #center.hidden #startbtn { display: none; }
+
+  #flash {
+    position: fixed; inset: 0; z-index: 7; pointer-events: none;
+    background: #e8d5ff; opacity: 0;
+  }
+
+  #toast {
+    position: fixed; left: 50%; top: 24%; transform: translate(-50%, -50%);
+    z-index: 6; text-align: center; pointer-events: none; opacity: 0;
+    transition: opacity .35s ease, transform .35s ease;
+  }
+  #toast.show { opacity: 1; }
+  #toast .lt {
+    font-size: clamp(20px, 5vw, 42px); font-weight: 800; letter-spacing: 5px;
+    color: #fff; text-transform: uppercase;
+    text-shadow: 0 4px 0 #2b4a19, 0 9px 22px rgba(0,0,0,.65);
+  }
+  #toast .ls {
+    margin-top: 8px; font-size: 11px; letter-spacing: 3px; color: #b6f97c;
+    text-transform: uppercase; text-shadow: 0 2px 0 rgba(0,0,0,.7);
+  }
+  .shake { animation: sh .25s linear; }
+  @keyframes sh { 0%,100%{transform:translate(0,0)} 25%{transform:translate(-3px,2px)} 50%{transform:translate(3px,-2px)} 75%{transform:translate(-2px,-1px)} }
+</style>
+</head>
+<body>
+<canvas id="game"></canvas>
+
+<div id="hud">
+  <div id="toprow">
+    <div class="chip">LEVEL <b id="lvlNum">1</b> / 6</div>
+    <div class="chip" id="lvlName">MEADOW</div>
+    <div class="chip">BUMPS <b id="bumps">0</b></div>
+  </div>
+  <div id="barwrap"><div id="fill"></div></div>
+</div>
+
+<div id="hint">SCROLL DOWN to roll &nbsp;·&nbsp; <span style="color:#a6f56a">A / D</span> or <span style="color:#a6f56a">← →</span> to steer</div>
+
+<div id="flash"></div>
+<div id="toast"><div class="lt"></div><div class="ls"></div></div>
+
+<div id="center">
+  <h1>BLOCKY<span>ROLL</span></h1>
+  <p>Roll the slime ball down the wiggly path<br>and into the portal at the end.<br>6 levels. Each one gets meaner.</p>
+  <p><b>SCROLL</b> to roll &nbsp; <span class="key">A</span><span class="key">D</span> / <span class="key">←</span><span class="key">→</span> to steer</p>
+  <button id="startbtn">START ROLLING</button>
+</div>
+
+<script>
+"use strict";
+
+/* ------------------------------------------------------------------ *
+ *  BLOCKY ROLL — one-file game. No assets, no dependencies.
+ *  Scroll down to roll the ball down a wiggly path into the portal.
+ * ------------------------------------------------------------------ */
+
+const cvs = document.getElementById('game');
+const ctx = cvs.getContext('2d');
+const UI = {
+  lvlNum: document.getElementById('lvlNum'),
+  lvlName: document.getElementById('lvlName'),
+  bumps: document.getElementById('bumps'),
+  fill: document.getElementById('fill'),
+  hint: document.getElementById('hint'),
+  center: document.getElementById('center'),
+  centerH: document.querySelector('#center h1'),
+  centerP: document.querySelector('#center p'),
+  startBtn: document.getElementById('startbtn'),
+  flash: document.getElementById('flash'),
+};
+
+let W = 0, H = 0, DPR = 1;
+function resize() {
+  DPR = Math.min(2, window.devicePixelRatio || 1);
+  W = window.innerWidth; H = window.innerHeight;
+  cvs.width = Math.max(1, Math.floor(W * DPR));
+  cvs.height = Math.max(1, Math.floor(H * DPR));
+  cvs.style.width = W + 'px'; cvs.style.height = H + 'px';
+  ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
+  ctx.imageSmoothingEnabled = false;
+}
+window.addEventListener('resize', resize);
+
+const BALL_R = 15;
+const TAU = Math.PI * 2;
+const clamp = (v, a, b) => v < a ? a : (v > b ? b : v);
+const lerp = (a, b, t) => a + (b - a) * t;
+
+/* Deterministic hash -> [0,1) so terrain never flickers between frames. */
+function hash2(x, y) {
+  const n = Math.sin(x * 127.1 + y * 311.7) * 43758.5453123;
+  return n - Math.floor(n);
+}
+
+/* ---------------------------- THEMES ------------------------------ */
+const THEMES = {
+  day: {
+    sky: ['#5eb8ff', '#c9ecff'], star: false,
+    ground: ['#7cc15a', '#74b954', '#6aae4b', '#63a446', '#5c9a41', '#83c761'],
+    path: ['#d8bd8a', '#cfb27c', '#c8a86f', '#e0c795'],
+    edge: ['#9d9d9d', '#8a8a8a', '#787878', '#adadad'],
+    trunk: '#6b4a24', leaf: ['#3f8f2e', '#4da33a', '#357c27'],
+    flower: ['#e8483c', '#f2d13b', '#7fd4f0', '#e9e9e9'],
+    water: ['#3f7fd4', '#4f92e0'], vignette: 'rgba(20,40,10,.25)',
+  },
+  forest: {
+    sky: ['#4f9f5e', '#9fd77f'], star: false,
+    ground: ['#5f9f49', '#57953f', '#4f8a39', '#67aa50', '#456f31', '#6bb053'],
+    path: ['#b99a68', '#ae8f5d', '#a3854f', '#c2a473'],
+    edge: ['#8b8b8b', '#797979', '#666', '#9a9a9a'],
+    trunk: '#5b3f1f', leaf: ['#357c27', '#2c6b20', '#3f8f2e'],
+    flower: ['#e8483c', '#f2d13b', '#d9d9d9', '#c46bd4'],
+    water: ['#2f6dbd', '#3f81d4'], vignette: 'rgba(8,30,10,.4)',
+  },
+  sunset: {
+    sky: ['#ff9a4d', '#ffd9a0'], star: false,
+    ground: ['#9c7a4e', '#8f6f45', '#82643c', '#a8885a', '#755a34', '#a17f52'],
+    path: ['#e0c491', '#d5b884', '#cbae77', '#e8d0a2'],
+    edge: ['#a58a70', '#91775e', '#7d654e', '#b39a80'],
+    trunk: '#5a3a1c', leaf: ['#a86a25', '#c07f2c', '#8d5518'],
+    flower: ['#f2d13b', '#ff8a4a', '#e8483c', '#ffe9a8'],
+    water: ['#5a7bb5', '#6d8fc9'], vignette: 'rgba(80,30,0,.28)',
+  },
+  night: {
+    sky: ['#0b1230', '#1c2b57'], star: true,
+    ground: ['#2f4a33', '#2a422e', '#243a29', '#35543a', '#1f3324', '#3a5c40'],
+    path: ['#6c6257', '#645a50', '#5c534a', '#736a5e'],
+    edge: ['#5b5b68', '#4d4d59', '#40404a', '#686876'],
+    trunk: '#3a2712', leaf: ['#24541b', '#1c4615', '#2d6521'],
+    flower: ['#7fd4f0', '#c46bd4', '#e9e9e9', '#5f8dd4'],
+    water: ['#1d3f74', '#264f8c'], vignette: 'rgba(0,4,20,.5)',
+  },
+  nether: {
+    sky: ['#4b0d0d', '#8c1f14'], star: false,
+    ground: ['#7d2a26', '#712421', '#65201d', '#8a3530', '#591b19', '#83302b'],
+    path: ['#8a4a3c', '#7d4235', '#713b2f', '#935245'],
+    edge: ['#5a2a24', '#4c231e', '#3f1d19', '#66322a'],
+    trunk: '#3d2018', leaf: ['#9c5a2a', '#7d3f1c', '#b06a30'],
+    flower: ['#ff7a3c', '#ffb03c', '#ff4d2e', '#ffd97a'],
+    water: ['#d4562a', '#e86a35'], vignette: 'rgba(60,0,0,.45)',
+  },
+  end: {
+    sky: ['#120b22', '#2b1d47'], star: true,
+    ground: ['#c9c3a8', '#bdb79c', '#b1ab90', '#d5cfb4', '#a59f84', '#cdc7ac'],
+    path: ['#8c86b0', '#7f79a3', '#736d96', '#9a94bd'],
+    edge: ['#5b3f6b', '#4d3559', '#402c48', '#6b4c7d'],
+    trunk: '#3f2d1c', leaf: ['#7a4fa3', '#653d8c', '#8d5fbd'],
+    flower: ['#e848e0', '#9c6bff', '#e9e9e9', '#ffd93c'],
+    water: ['#5a3f9c', '#6b4fb0'], vignette: 'rgba(10,0,25,.5)',
+  },
+};
+
+/* ---------------------------- LEVELS ------------------------------ *
+ * len    world length (how far you scroll)
+ * amp    how wide the path wiggles
+ * freq   how tight the wiggles are
+ * half   corridor half-width (smaller = harder)
+ * narrow how much the corridor pinches (0..0.2)
+ * obs    number of sliding blocks
+ *
+ * amp * freq * 1.463 is the path's steepest sideways slope (world x per
+ * world y). It is tuned upward level by level but stays under the ball's
+ * top sideways speed, so a good player can always follow the path.
+ * ------------------------------------------------------------------ */
+const LEVELS = [
+  { name: 'MEADOW',       len: 2800, amp:  91, freq: 0.00337, half: 88, narrow: 0.00, theme: 'day',    obs: 0 },
+  { name: 'FOREST',       len: 3100, amp: 112, freq: 0.00365, half: 76, narrow: 0.05, theme: 'forest', obs: 3 },
+  { name: 'SUNSET RIDGE', len: 3400, amp: 139, freq: 0.00370, half: 66, narrow: 0.08, theme: 'sunset', obs: 6 },
+  { name: 'NIGHT CAVES',  len: 3700, amp: 172, freq: 0.00357, half: 58, narrow: 0.11, theme: 'night',  obs: 8 },
+  { name: 'THE NETHER',   len: 4000, amp: 207, freq: 0.00346, half: 52, narrow: 0.14, theme: 'nether', obs: 10 },
+  { name: 'THE END',      len: 4300, amp: 244, freq: 0.00336, half: 47, narrow: 0.17, theme: 'end',    obs: 12 },
+];
+
+/* Path centre line, in world x, for a given world y. Two harmonics
+ * make it read as an organic wiggly path rather than a plain sine. */
+function cxAt(y, L) {
+  const base = Math.sin(y * L.freq) * L.amp;
+  const wobble = Math.sin(y * L.freq * 0.47 + 1.3) * L.amp * 0.5;
+  const ripple = Math.sin(y * L.freq * 1.9 + 0.6) * L.amp * 0.12;
+  return base + wobble + ripple;
+}
+
+/* Corridor half-width at a given world y (pinches on harder levels). */
+function halfAt(y, L) {
+  if (!L.narrow) return L.half;
+  const pinch = 0.5 + 0.5 * Math.sin(y * 0.0034 + 2.0);
+  return L.half * (1 - L.narrow * pinch);
+}
+
+/* ----------------------------- STATE ------------------------------ */
+const game = {
+  level: 0, y: 0, scroll: 0, x: 0, vx: 0,
+  camX: 0, camY: 0, shake: 0, time: 0,
+  state: 'menu',           // menu | play | teleport | win
+  stateT: 0, bumps: 0, bumpCd: 0,
+  obstacles: [],
+};
+
+const level = () => LEVELS[game.level];
+const keys = { left: false, right: false, up: false, down: false, hold: false };
+
+/* Sliding blocks. A block's centre stays inside the strip [left wall +
+ * w/2, left wall + w/2 + travel], and its width plus travel is capped by
+ * the corridor width minus GAP — so whichever side the block is on, at
+ * least GAP px of free path is always left for the ball. */
+const GAP = BALL_R * 2 + 14;
+function buildObstacles(L) {
+  const list = [];
+  for (let i = 0; i < L.obs; i++) {
+    const t = (i + 0.75) / (L.obs + 0.55);
+    const y = clamp(L.len * t + (hash2(i * 3.7, 11.3) - 0.5) * 200, 600, L.len - 600);
+    const cx = cxAt(y, L), hw = halfAt(y, L);
+    const room = 2 * hw - GAP;                       // space the block may occupy
+    if (room < 34) continue;                         // corridor too tight — no block here
+    const w = Math.min(96, room * 0.62);
+    list.push({
+      y, w, h: 26, travel: room - w,
+      cx, hw, baseX: cx - hw + w / 2,
+      spd: 0.7 + hash2(i * 5.1, 2.2) * 0.9,
+      phase: hash2(i * 2.3, 7.7) * TAU,
+      kind: i % 3,
+    });
+  }
+  return list;
+}
+function obstacleX(o) {
+  return o.baseX + (0.5 + 0.5 * Math.sin(game.time * o.spd + o.phase)) * o.travel;
+}
+/* How much free path is left on each side of a block right now. */
+function blockRooms(o) {
+  const ox = obstacleX(o);
+  return { left: (ox - o.w / 2) - (o.cx - o.hw), right: (o.cx + o.hw) - (ox + o.w / 2) };
+}
+
+/* =========================== RENDER =============================== */
+
+let camX = 0, camY = 0;           // top-left of the view, in world coords
+const sx = x => x - camX;
+const sy = y => y - camY;
+/* Where a world point lands on the canvas, in CSS pixels (render() rounds
+ * the camera at the start of every frame). Handy for tests and tinkering. */
+function screenOf(x, y) { return { x: sx(x), y: sy(y) }; }
+
+const GROUND_BLOCK = 32;
+const DECO_CELL = 220;
+
+/* Full-screen blocky ground — the "Minecraft" backdrop. Blocks are
+ * shaded from a deterministic hash of their world position, so the
+ * grass looks hand-placed but never shimmers between frames. */
+function drawGround(th) {
+  const g = th.ground;
+  const x0 = Math.floor(camX / GROUND_BLOCK) * GROUND_BLOCK;
+  const y0 = Math.floor(camY / GROUND_BLOCK) * GROUND_BLOCK;
+  const xe = camX + W + GROUND_BLOCK, ye = camY + H + GROUND_BLOCK;
+  for (let gx = x0; gx < xe; gx += GROUND_BLOCK) {
+    for (let gy = y0; gy < ye; gy += GROUND_BLOCK) {
+      const h = hash2(gx * 0.013, gy * 0.013);
+      ctx.fillStyle = g[(h * g.length) | 0];
+      ctx.fillRect(sx(gx), sy(gy), GROUND_BLOCK + 1, GROUND_BLOCK + 1);
+      const h2 = hash2(gx * 0.031 + 5.5, gy * 0.031 + 9.1);
+      if (h2 > 0.86) {                       // sparse pixel detail
+        ctx.fillStyle = 'rgba(0,0,0,.10)';
+        ctx.fillRect(sx(gx) + 6, sy(gy) + 8, 9, 9);
+      } else if (h2 < 0.07) {
+        ctx.fillStyle = 'rgba(255,255,255,.09)';
+        ctx.fillRect(sx(gx) + 14, sy(gy) + 5, 7, 7);
+      }
+    }
+  }
+}
+
+function block(x, y, s, color, shade) {
+  ctx.fillStyle = color;
+  ctx.fillRect(x, y, s, s);
+  ctx.fillStyle = shade;
+  ctx.fillRect(x, y, s, Math.max(1, s * 0.18));
+  ctx.fillStyle = 'rgba(0,0,0,.22)';
+  ctx.fillRect(x, y + s - Math.max(1, s * 0.16), s, Math.max(1, s * 0.16));
+}
+
+function clearOfPath(px, py, margin, L) {
+  const steps = 3;
+  for (let i = 0; i <= steps; i++) {
+    const yy = py - margin / 2 + (margin * i) / steps;
+    const hw = halfAt(yy, L) + margin;
+    if (Math.abs(px - cxAt(yy, L)) < hw) return false;
+  }
+  return true;
+}
+
+/* Trees, flowers, ponds, boulders, torches and glowstone, laid out on a
+ * sparse world grid so the field is lush but the path stays clear. */
+function drawDecor(th, L) {
+  const i0 = Math.floor((camX - DECO_CELL) / DECO_CELL);
+  const i1 = Math.floor((camX + W + DECO_CELL) / DECO_CELL);
+  const j0 = Math.floor((camY - DECO_CELL) / DECO_CELL);
+  const j1 = Math.floor((camY + H + DECO_CELL) / DECO_CELL);
+  const twinkle = 0.5 + 0.5 * Math.sin(game.time * 2.2);
+
+  for (let i = i0; i <= i1; i++) {
+    for (let j = j0; j <= j1; j++) {
+      const h = hash2(i * 1.7 + 0.3, j * 2.9 + 0.7);
+      const h3 = hash2(i * 4.1 + 1.9, j * 3.3 + 2.5);
+      if (h > 0.66) continue;
+      const px = i * DECO_CELL + h3 * 150 + 20;
+      const py = j * DECO_CELL + h * 320 + 20;
+      const pxx = sx(px), pyy = sy(py);
+      if (pxx < -260 || pxx > W + 260 || pyy < -320 || pyy > H + 320) continue;
+      const kind = hash2(i * 8.3 + 3.1, j * 6.7 + 4.4);
+
+      if (kind < 0.32) {                                  // tree
+        if (!clearOfPath(px, py, 150, L)) continue;
+        drawTree(th, pxx, pyy);
+      } else if (kind < 0.50) {                           // flowers
+        if (!clearOfPath(px, py, 46, L)) continue;
+        drawFlowers(th, pxx, pyy, i, j);
+      } else if (kind < 0.62) {                            // grass tuft
+        if (!clearOfPath(px, py, 30, L)) continue;
+        ctx.fillStyle = th.leaf[0];
+        for (let k = 0; k < 4; k++) {
+          const ox = (hash2(i + k, j) - 0.5) * 34;
+          const oy = (hash2(i, j + k) - 0.5) * 26;
+          ctx.fillRect(pxx + ox, pyy + oy, 6, 12);
+          ctx.fillStyle = k % 2 ? th.leaf[1] : th.leaf[0];
+        }
+      } else if (kind < 0.72) {                            // pond
+        if (!clearOfPath(px, py, 90, L)) continue;
+        drawPond(th, pxx, pyy);
+      } else if (kind < 0.82) {                            // boulder
+        if (!clearOfPath(px, py, 70, L)) continue;
+        drawBoulder(th, pxx, pyy, i, j);
+      } else if (kind < 0.92) {                            // torch
+        if (!clearOfPath(px, py, 50, L)) continue;
+        drawTorch(th, pxx, pyy, twinkle);
+      } else if (th.star) {                                // glowstone
+        if (!clearOfPath(px, py, 44, L)) continue;
+        const a = 0.25 + 0.35 * twinkle;
+        const gr = ctx.createRadialGradient(pxx, pyy, 0, pxx, pyy, 46);
+        gr.addColorStop(0, 'rgba(255,240,170,' + a + ')');
+        gr.addColorStop(1, 'rgba(255,240,170,0)');
+        ctx.fillStyle = gr;
+        ctx.fillRect(pxx - 46, pyy - 46, 92, 92);
+        block(pxx - 9, pyy - 9, 18, '#ffe9a0', '#fff6d0');
+      }
+    }
+  }
+}
+
+function drawTree(th, x, y) {
+  ctx.fillStyle = 'rgba(0,0,0,.28)';                 // flat-top-down shadow
+  ctx.fillRect(x - 34 + 7, y - 34 + 9, 68, 68);
+  const bs = 22;
+  for (let a = 0; a < 3; a++) {
+    for (let b = 0; b < 3; b++) {
+      if (a === 1 && b === 1) continue;
+      if ((a + b) % 2 === 1 && hash2(a + x, b + y) > 0.86) continue;
+      const lv = th.leaf[(hash2(a * 3 + x * 0.01, b * 5 + y * 0.01) * 3) | 0];
+      block(x - 33 + a * bs, y - 33 + b * bs, bs, lv, 'rgba(255,255,255,.13)');
+    }
+  }
+  block(x - 11, y - 11, 22, th.trunk, 'rgba(255,255,255,.16)');
+}
+
+function drawFlowers(th, x, y, i, j) {
+  for (let k = 0; k < 5; k++) {
+    const ox = Math.round((hash2(i * 2 + k, j * 3) - 0.5) * 54);
+    const oy = Math.round((hash2(i * 5, j * 7 + k) - 0.5) * 44);
+    ctx.fillStyle = '#3f8f2e';
+    ctx.fillRect(x + ox + 2, y + oy + 5, 3, 7);
+    ctx.fillStyle = th.flower[k % th.flower.length];
+    ctx.fillRect(x + ox, y + oy, 7, 7);
+    ctx.fillStyle = 'rgba(255,255,255,.5)';
+    ctx.fillRect(x + ox + 2, y + oy + 2, 3, 3);
+  }
+}
+
+function drawPond(th, x, y) {
+  for (let a = -1; a <= 1; a++) {
+    for (let b = -1; b <= 1; b++) {
+      if (Math.abs(a) + Math.abs(b) === 2) continue;
+      block(x - 24 + a * 24, y - 24 + b * 24, 24, th.water[(a + b + 2) % 2], 'rgba(255,255,255,.18)');
+    }
+  }
+  ctx.fillStyle = 'rgba(255,255,255,.22)';
+  ctx.fillRect(x - 16, y - 16, 12, 5);
+}
+
+function drawBoulder(th, x, y, i, j) {
+  ctx.fillStyle = 'rgba(0,0,0,.25)';
+  ctx.fillRect(x - 26, y - 20, 56, 46);
+  for (let k = 0; k < 3; k++) {
+    const ox = Math.round((hash2(i + k, j) - 0.5) * 40);
+    const oy = Math.round((hash2(i, j + k) - 0.5) * 34);
+    const s = 20 + ((hash2(k + i, j) * 14) | 0);
+    block(x + ox, y + oy, s, th.edge[(hash2(k, i + j) * 4) | 0], 'rgba(255,255,255,.14)');
+  }
+}
+
+function drawTorch(th, x, y, twinkle) {
+  const a = 0.2 + 0.3 * twinkle;
+  const gr = ctx.createRadialGradient(x + 3, y + 3, 0, x + 3, y + 3, 70);
+  gr.addColorStop(0, 'rgba(255,190,90,' + a + ')');
+  gr.addColorStop(1, 'rgba(255,190,90,0)');
+  ctx.fillStyle = gr;
+  ctx.fillRect(x - 70, y - 70, 148, 148);
+  ctx.fillStyle = th.trunk;
+  ctx.fillRect(x, y, 7, 22);
+  ctx.fillStyle = '#ffcf5a';
+  ctx.fillRect(x - 2, y - 6, 11, 9);
+  ctx.fillStyle = '#fff2b0';
+  ctx.fillRect(x + 1, y - 4, 5, 5);
+}
+
+/* The wiggly path: a stone-edged trail of blocky gravel. */
+function drawPath(th, L, clipTop, clipBottom) {
+  const step = 9;
+  const path = new Path2D();
+  let started = false;
+  for (let y = clipTop; y <= clipBottom; y += step) {
+    const c = sx(cxAt(y, L)), hw = halfAt(y, L), yy = sy(y);
+    if (!started) { path.moveTo(c - hw, yy); started = true; }
+    else path.lineTo(c - hw, yy);
+  }
+  for (let y = clipBottom; y >= clipTop; y -= step) {
+    path.lineTo(sx(cxAt(y, L)) + halfAt(y, L), sy(y));
+  }
+  path.closePath();
+
+  ctx.save();
+  ctx.clip(path);
+  ctx.fillStyle = th.path[0];
+  ctx.fillRect(0, 0, W, H);
+  const bstep = 18;
+  const y0 = Math.floor(clipTop / bstep) * bstep;
+  for (let y = y0; y < clipBottom; y += bstep) {
+    const c = cxAt(y, L), hw = halfAt(y, L), yy = sy(y);
+    for (let x = c - hw - bstep; x < c + hw + bstep; x += bstep) {
+      const h = hash2(x * 0.021, y * 0.021);
+      ctx.fillStyle = th.path[(h * th.path.length) | 0];
+      ctx.fillRect(sx(x), yy, bstep + 1, bstep + 1);
+      if (h > 0.93) {
+        ctx.fillStyle = 'rgba(0,0,0,.13)';
+        ctx.fillRect(sx(x) + 5, yy + 4, 7, 7);
+      }
+    }
+  }
+  ctx.restore();
+
+  // Stone border blocks + soft inner shadow so the corridor reads as walls.
+  const es = 15;
+  for (let y = Math.floor(clipTop / 12) * 12; y <= clipBottom; y += 12) {
+    const c = cxAt(y, L), hw = halfAt(y, L), yy = sy(y);
+    const hsh = hash2(y * 0.05, 1.7), hsh2 = hash2(y * 0.05, 9.4);
+    block(sx(c - hw) - es * 0.5, yy - 2, es, th.edge[(hsh * 4) | 0], 'rgba(255,255,255,.12)');
+    block(sx(c + hw) - es * 0.5, yy - 2, es, th.edge[(hsh2 * 4) | 0], 'rgba(255,255,255,.12)');
+    ctx.fillStyle = 'rgba(0,0,0,.20)';
+    ctx.fillRect(sx(c - hw) + es * 0.5, yy - 2, 6, 16);
+    ctx.fillRect(sx(c + hw) - es * 0.5 - 6, yy - 2, 6, 16);
+  }
+}
+
+/* Finish line: a nether-portal style gate you get teleported by. */
+function drawGate(th, L, portalT) {
+  const gy = L.len, gx = sx(cxAt(gy, L)), yy = sy(gy);
+  if (yy < -260 || yy > H + 300) return;
+  const hw = Math.min(halfAt(gy, L) - 4, 74);
+  const h = 96;
+
+  const pulse = 0.55 + 0.45 * Math.sin(game.time * 3);
+  const gr = ctx.createRadialGradient(gx, yy - h / 2, 8, gx, yy - h / 2, 190);
+  gr.addColorStop(0, 'rgba(186,104,255,' + (0.42 + 0.24 * pulse) + ')');
+  gr.addColorStop(1, 'rgba(186,104,255,0)');
+  ctx.fillStyle = gr;
+  ctx.fillRect(gx - 210, yy - h / 2 - 210, 420, 420);
+
+  // obsidian frame
+  const fs = 18;
+  for (let x = -hw - fs; x <= hw; x += fs) {
+    block(gx + x, yy - h - fs, fs, '#241436', 'rgba(255,255,255,.10)');
+    block(gx + x, yy, fs, '#241436', 'rgba(255,255,255,.10)');
+  }
+  for (let y = -h; y < 0; y += fs) {
+    block(gx - hw - fs, yy + y, fs, '#1b0f2b', 'rgba(255,255,255,.10)');
+    block(gx + hw, yy + y, fs, '#1b0f2b', 'rgba(255,255,255,.10)');
+  }
+
+  // swirling inner portal
+  ctx.save();
+  ctx.beginPath();
+  ctx.rect(gx - hw, yy - h, hw * 2 + 1, h + 1);
+  ctx.clip();
+  ctx.fillStyle = '#12071f';
+  ctx.fillRect(gx - hw, yy - h, hw * 2 + 1, h + 1);
+  for (let k = 0; k < 14; k++) {
+    const t = game.time * 1.6 + k * 0.75;
+    const px = gx + Math.sin(t) * hw * 0.72;
+    const py = yy - h / 2 + Math.cos(t * 1.3 + k) * h * 0.42;
+    const rad = 12 + 7 * Math.sin(t * 2 + k);
+    const cg = ctx.createRadialGradient(px, py, 0, px, py, rad);
+    cg.addColorStop(0, 'rgba(226,180,255,.85)');
+    cg.addColorStop(0.5, 'rgba(150,80,240,.45)');
+    cg.addColorStop(1, 'rgba(120,60,220,0)');
+    ctx.fillStyle = cg;
+    ctx.fillRect(px - rad, py - rad, rad * 2, rad * 2);
+  }
+  ctx.restore();
+
+  if (game.state === 'teleport') {
+    for (let k = 0; k < 3; k++) {
+      const p = ((portalT * 1.3 + k / 3) % 1);
+      ctx.strokeStyle = 'rgba(226,190,255,' + (1 - p) * 0.8 + ')';
+      ctx.lineWidth = 6;
+      ctx.beginPath();
+      ctx.ellipse(gx, yy - h / 2, 20 + p * 220, (20 + p * 220) * 0.6, 0, 0, TAU);
+      ctx.stroke();
+    }
+  }
+}
+
+function drawObstacles(th) {
+  for (const o of game.obstacles) {
+    const x = obstacleX(o), yy = sy(o.y);
+    if (yy < -80 || yy > H + 80) continue;
+    const px = sx(x), py = yy + Math.sin(game.time * 2.4 + o.phase) * 2;
+    ctx.fillStyle = 'rgba(0,0,0,.3)';
+    ctx.fillRect(px - o.w / 2 + 6, py - o.h / 2 + 8, o.w, o.h);
+    const base = o.kind === 0 ? '#5a5a66' : o.kind === 1 ? '#6b5a4a' : '#4a5a66';
+    for (let bx = -o.w / 2; bx < o.w / 2 - 1; bx += o.h) {
+      const h = hash2(o.y * 0.1 + bx, o.phase);
+      block(px + bx, py - o.h / 2, Math.min(o.h, o.w / 2 - bx), base, 'rgba(255,255,255,.16)');
+      ctx.fillStyle = 'rgba(0,0,0,.18)';
+      ctx.fillRect(px + bx + 6, py - o.h / 2 + 6, Math.max(3, o.h - 12), Math.max(3, o.h - 12) * 0.5);
+      if (h > 0.6) { ctx.fillStyle = 'rgba(255,255,255,.1)'; ctx.fillRect(px + bx + 4, py - 4, 8, 6); }
+    }
+    // Warning bolts on the sides so you see which way it slides.
+    ctx.fillStyle = 'rgba(255,220,90,.9)';
+    ctx.fillRect(px - o.w / 2, py - o.h / 2 - 4, o.w, 4);
+  }
+}
+
+function drawBall(th) {
+  const px = sx(game.x), py = sy(game.y);
+  const roll = game.y / BALL_R;
+  const squash = 1 + Math.min(0.12, Math.abs(game.vx) / 4000);
+  const shrunk = BALL_R * ballScale;
+
+  ctx.fillStyle = 'rgba(0,0,0,.34)';
+  ctx.beginPath();
+  ctx.ellipse(px + 4, py + 6, shrunk * 1.05, shrunk * 0.78, 0, 0, TAU);
+  ctx.fill();
+
+  ctx.save();
+  ctx.translate(px, py);
+  ctx.scale(ballScale * squash, ballScale / squash);
+  const g = ctx.createRadialGradient(-BALL_R * 0.35, -BALL_R * 0.35, BALL_R * 0.2, 0, 0, BALL_R);
+  g.addColorStop(0, '#c6ff8a');
+  g.addColorStop(0.55, '#7fd23f');
+  g.addColorStop(1, '#41801f');
+  ctx.fillStyle = g;
+  ctx.beginPath();
+  ctx.arc(0, 0, BALL_R, 0, TAU);
+  ctx.fill();
+  ctx.strokeStyle = 'rgba(24,60,10,.75)';
+  ctx.lineWidth = 3;
+  ctx.stroke();
+
+  // pixel speckles that rotate as the ball rolls
+  for (let k = 0; k < 5; k++) {
+    const a = roll + k * 1.256;
+    const rr = BALL_R * (k % 2 ? 0.52 : 0.82);
+    ctx.fillStyle = k % 2 ? 'rgba(255,255,255,.30)' : 'rgba(30,70,12,.35)';
+    ctx.fillRect(Math.cos(a) * rr - 2, Math.sin(a) * rr - 2, 5, 5);
+  }
+  ctx.restore();
+
+  // face (always upright, so it stays readable while rolling)
+  ctx.fillStyle = '#1d2a12';
+  const eyeY = py - 3;
+  ctx.fillRect(px - 7, eyeY - 3, 4, 5);
+  ctx.fillRect(px + 3, eyeY - 3, 4, 5);
+  ctx.fillStyle = '#fff';
+  ctx.fillRect(px - 6, eyeY - 2, 2, 2);
+  ctx.fillRect(px + 4, eyeY - 2, 2, 2);
+  ctx.fillStyle = '#1d2a12';
+  ctx.fillRect(px - 4, py + 5, 8, 3);
+}
+
+function drawVignette(th) {
+  const g = ctx.createRadialGradient(W / 2, H * 0.42, Math.min(W, H) * 0.28, W / 2, H * 0.5, Math.max(W, H) * 0.78);
+  g.addColorStop(0, 'rgba(0,0,0,0)');
+  g.addColorStop(1, th.vignette);
+  ctx.fillStyle = g;
+  ctx.fillRect(0, 0, W, H);
+}
+
+function render(portalT) {
+  const L = level(), th = THEMES[L.theme];
+  const shakeX = game.shake ? (Math.random() - 0.5) * game.shake : 0;
+  const shakeY = game.shake ? (Math.random() - 0.5) * game.shake : 0;
+  camX = game.camX - W / 2 + shakeX;
+  camY = game.camY - shakeY;
+
+  ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
+  ctx.fillStyle = th.sky[1];
+  ctx.fillRect(0, 0, W, H);
+
+  drawGround(th);
+  drawDecor(th, L);
+  drawPath(th, L, camY - 60, camY + H + 60);
+  drawGate(th, L, portalT);
+  drawObstacles(th);
+  drawBall(th);
+  drawVignette(th);
+}
+
+/* ============================ AUDIO =============================== */
+let actx = null, audioOn = true;
+function beep(freq, dur, type, vol, slideTo) {
+  if (!audioOn) return;
+  try {
+    actx = actx || new (window.AudioContext || window.webkitAudioContext)();
+    if (actx.state === 'suspended') actx.resume();
+    const o = actx.createOscillator(), g = actx.createGain(), t = actx.currentTime;
+    o.type = type || 'square';
+    o.frequency.setValueAtTime(freq, t);
+    if (slideTo) o.frequency.exponentialRampToValueAtTime(Math.max(40, slideTo), t + dur);
+    g.gain.setValueAtTime(vol == null ? 0.05 : vol, t);
+    g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+    o.connect(g); g.connect(actx.destination);
+    o.start(t); o.stop(t + dur + 0.02);
+  } catch (e) { /* audio is a nicety, never fatal */ }
+}
+
+/* =========================== GAME FLOW ============================= */
+let ballScale = 1;
+let portalT = 0;
+
+function startLevel() {
+  const L = level();
+  game.y = 0; game.scroll = 0;
+  game.x = cxAt(0, L); game.vx = 0;
+  game.camX = game.x; game.camY = game.y - H * 0.34;
+  game.obstacles = buildObstacles(L);
+  game.state = 'play'; game.stateT = 0;
+  ballScale = 1; portalT = 0;
+  UI.flash.style.opacity = '0';
+  UI.lvlNum.textContent = String(game.level + 1);
+  UI.lvlName.textContent = L.name;
+  toast('LEVEL ' + (game.level + 1), L.name + '  ·  ' + L.obs + ' SLIDING BLOCKS');
+}
+
+function restartGame() {
+  game.level = 0; game.bumps = 0;
+  UI.bumps.textContent = '0';
+  UI.center.classList.add('hidden');
+  startLevel();
+}
+
+function win() {
+  game.state = 'win';
+  UI.centerH.innerHTML = 'YOU <span>WIN</span>';
+  UI.centerP.innerHTML = 'You rolled all ' + LEVELS.length + ' levels.<br>Total bumps into the walls: <b>' + game.bumps + '</b><br><br>Scroll to go again.';
+  UI.center.classList.remove('hidden');
+  UI.flash.style.opacity = '0';
+  beep(523, 0.12, 'square', 0.05);
+  setTimeout(() => beep(659, 0.12, 'square', 0.05), 120);
+  setTimeout(() => beep(784, 0.12, 'square', 0.05), 240);
+  setTimeout(() => beep(1047, 0.3, 'square', 0.05), 360);
+}
+
+let toastTimer = 0;
+function toast(big, small) {
+  const t = document.getElementById('toast');
+  t.querySelector('.lt').textContent = big;
+  t.querySelector('.ls').textContent = small;
+  t.classList.add('show');
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => t.classList.remove('show'), 1900);
+}
+
+function bump(strength) {
+  game.bumps++;
+  UI.bumps.textContent = String(game.bumps);
+  game.shake = Math.min(16, strength);
+  beep(110 + Math.random() * 30, 0.09, 'square', 0.045, 70);
+  if (navigator.vibrate) { try { navigator.vibrate(18); } catch (e) {} }
+}
+
+/* ============================ UPDATE ============================== */
+function update(dt) {
+  const L = level();
+  game.time += dt;
+  game.shake = Math.max(0, game.shake - dt * 55);
+
+  if (game.state === 'teleport') {
+    game.stateT += dt;
+    portalT = game.stateT;
+    const gx = cxAt(L.len, L);
+    const k = 1 - Math.exp(-dt * 7);
+    game.x = lerp(game.x, gx, k);
+    game.y = Math.min(L.len, game.y + 150 * dt);
+    ballScale = Math.max(0.05, 1 - Math.pow(game.stateT / 1.15, 3));
+    UI.flash.style.opacity = String(clamp((game.stateT - 0.2) / 0.5, 0, 1));
+    game.camX = lerp(game.camX, game.x, 1 - Math.exp(-dt * 6));
+    game.camY = lerp(game.camY, game.y - H * 0.34, 1 - Math.exp(-dt * 8));
+    if (game.stateT > 1.2) {
+      if (game.level + 1 >= LEVELS.length) { win(); return; }
+      game.level++;
+      startLevel();
+    }
+    return;
+  }
+  if (game.state !== 'play') { game.camX = lerp(game.camX, game.x, 1 - Math.exp(-dt * 4)); return; }
+
+  // ---- scrolling drives the ball down the path ----
+  let sc = 0;
+  if (keys.down) sc += 1;
+  if (keys.up) sc -= 1;
+  if (sc) game.scroll = clamp(game.scroll + sc * 460 * dt, 0, L.len + 40);
+  game.scroll = clamp(game.scroll, 0, L.len + 40);
+  game.y = clamp(lerp(game.y, game.scroll, Math.min(1, dt * 15)), 0, L.len + 40);
+
+  // ---- steering ----
+  let ax = 0;
+  if (keys.left) ax -= 1;
+  if (keys.right) ax += 1;
+  game.vx += ax * 10500 * dt;
+  game.vx *= Math.exp(-dt * 14);
+  game.vx = clamp(game.vx, -800, 800);
+  game.x += game.vx * dt;
+  game.bumpCd = Math.max(0, game.bumpCd - dt);
+
+  // ---- sliding blocks ----
+  for (const o of game.obstacles) {
+    const ox = obstacleX(o);
+    const dx = game.x - ox, dy = game.y - o.y;
+    const hx = o.w / 2 + BALL_R, hy = o.h / 2 + BALL_R;
+    if (Math.abs(dx) < hx && Math.abs(dy) < hy) {
+      const px = hx - Math.abs(dx), py = hy - Math.abs(dy);
+      if (px < py) {
+        game.x = ox + Math.sign(dx || 1) * hx;
+        game.vx = -game.vx * 0.4 + Math.sign(dx || 1) * 120;
+      } else {
+        game.y = o.y + Math.sign(dy || 1) * hy;
+        game.scroll = clamp(game.y, 0, L.len + 40);
+        // Sitting on top of a block: ease toward the open side so a run can
+        // never dead-end on a block, even if the player does nothing.
+        const r = blockRooms(o);
+        const open = r.right >= r.left ? 1 : -1;
+        game.x += open * 80 * dt;
+      }
+      if (game.bumpCd <= 0) { bump(16); game.bumpCd = 0.25; }
+    }
+  }
+
+  // ---- walls of the wiggly corridor (last, so nothing can push you out) ----
+  const c = cxAt(game.y, L);
+  const hw = halfAt(game.y, L) - BALL_R;
+  const d = game.x - c;
+  if (Math.abs(d) > hw) {
+    const side = Math.sign(d) || 1;
+    game.x = c + side * hw;
+    if (game.bumpCd <= 0) {                            // one bump per hit, not per frame
+      bump(clamp(4 + Math.abs(game.vx) / 45, 5, 15));
+      game.bumpCd = 0.25;
+      game.scroll = Math.max(0, game.scroll - 4);
+    }
+    game.scroll = Math.max(0, game.scroll - 60 * dt);  // scraping the wall costs speed
+    game.vx = -game.vx * 0.35 - side * 60;
+  }
+
+  // ---- camera ----
+  game.camX = lerp(game.camX, game.x, 1 - Math.exp(-dt * 3.4));
+  game.camY = lerp(game.camY, game.y - H * 0.34, 1 - Math.exp(-dt * 11));
+
+  // ---- the portal ----
+  if (game.y >= L.len - 26 && game.state === 'play') {
+    game.state = 'teleport'; game.stateT = 0; portalT = 0;
+    beep(300, 0.5, 'sine', 0.06, 1400);
+    toast('TELEPORTING', 'LEVEL ' + (game.level + 1) + ' COMPLETE');
+  }
+
+  UI.fill.style.width = (clamp(game.y / L.len, 0, 1) * 100).toFixed(1) + '%';
+}
+
+/* ============================= INPUT ============================== */
+function scrollInput(dy) {
+  if (game.state === 'menu') { restartGame(); }
+  if (game.state === 'win') { restartGame(); return; }
+  if (game.state !== 'play') return;
+  const L = level();
+  game.scroll = clamp(game.scroll + dy, 0, L.len + 40);
+  UI.hint.classList.add('dim');
+}
+
+window.addEventListener('wheel', e => {
+  e.preventDefault();
+  scrollInput(e.deltaY * 0.75);
+}, { passive: false });
+
+const KEYMAP = {
+  ArrowLeft: 'left', a: 'left', A: 'left',
+  ArrowRight: 'right', d: 'right', D: 'right',
+  ArrowUp: 'up', w: 'up', W: 'up',
+  ArrowDown: 'down', s: 'down', S: 'down',
+};
+window.addEventListener('keydown', e => {
+  if (KEYMAP[e.key]) { keys[KEYMAP[e.key]] = true; e.preventDefault(); UI.hint.classList.add('dim'); }
+  if (e.key === ' ' || e.key === 'Enter') {
+    e.preventDefault();
+    if (game.state === 'menu' || game.state === 'win') restartGame();
+  }
+  if (e.key === 'r' || e.key === 'R') {
+    if (game.state === 'teleport') return;
+    game.level = game.level; game.bumps = game.bumps;
+    startLevel();
+  }
+});
+window.addEventListener('keyup', e => { if (KEYMAP[e.key]) keys[KEYMAP[e.key]] = false; });
+window.addEventListener('blur', () => { for (const k in keys) keys[k] = false; });
+
+let drag = null;
+cvs.addEventListener('pointerdown', e => {
+  if (game.state === 'menu' || game.state === 'win') { restartGame(); }
+  drag = { x: e.clientX, y: e.clientY, id: e.pointerId };
+  try { cvs.setPointerCapture(e.pointerId); } catch (err) {}
+  UI.hint.classList.add('dim');
+});
+cvs.addEventListener('pointermove', e => {
+  if (!drag || e.pointerId !== drag.id) return;
+  const dx = e.clientX - drag.x, dy = e.clientY - drag.y;
+  drag.x = e.clientX; drag.y = e.clientY;
+  if (game.state !== 'play') return;
+  scrollInput(-dy * 2.1);                       // drag up = roll down
+  game.vx = clamp(game.vx + dx * 7, -430, 430);
+});
+cvs.addEventListener('pointerup', e => { if (drag && e.pointerId === drag.id) drag = null; });
+cvs.addEventListener('pointercancel', () => { drag = null; });
+document.getElementById('startbtn').addEventListener('click', e => { e.stopPropagation(); restartGame(); });
+
+/* ============================== LOOP ============================== */
+let last = 0;
+function frame(now) {
+  const dt = Math.min(0.05, last ? (now - last) / 1000 : 0.016);
+  last = now;
+  update(dt);
+  render(portalT);
+  requestAnimationFrame(frame);
+}
+
+resize();
+game.x = cxAt(0, level());
+game.camX = game.x;
+game.camY = game.y - H * 0.34;
+requestAnimationFrame(frame);
+
+/* Exposed for tests / tinkering from the console. */
+window.BLOCKYROLL = { game, LEVELS, level, cxAt, screenOf, halfAt, obstacleX, blockRooms, buildObstacles, GAP, BALL_R, startLevel, restartGame, update, render, keys, THEMES, get ballScale() { return ballScale; } };
+
+
+
+</script>
+</body>
+</html>
