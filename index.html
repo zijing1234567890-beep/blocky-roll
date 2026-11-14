@@ -69,6 +69,7 @@
   .pbtn i { font-style: normal; font-size: 21px; line-height: 1; color: #a6f56a; }
   .pbtn.on { background: rgba(84,128,48,.92); transform: translateY(2px); }
   .pbtn.on i { color: #ffe57a; }
+  .pbtn .k { font-size: 10px; letter-spacing: 1.2px; color: #ffe57a; }
   @media (max-width: 760px) {
     #hint { bottom: 96px; font-size: 10px; }
     .pbtn { min-width: 92px; min-height: 60px; }
@@ -145,11 +146,11 @@
   <div id="barwrap"><div id="fill"></div></div>
 </div>
 
-<div id="hint">SCROLL or hold <span style="color:#a6f56a">▲ ROLL</span> to go forward and <span style="color:#a6f56a">▼ BACK</span> to go back &nbsp;·&nbsp; <span style="color:#a6f56a">A / D</span> or <span style="color:#a6f56a">← →</span> to steer &nbsp;·&nbsp; push the plank over the broken span &nbsp;·&nbsp; roll into the foam wall and it collapses</div>
+<div id="hint">Hold <span style="color:#a6f56a">▲ ROLL</span> (<span style="color:#ffe57a">↑</span> / <span style="color:#ffe57a">W</span>) or scroll up to go forward &nbsp;·&nbsp; hold <span style="color:#a6f56a">▼ BACK</span> (<span style="color:#ffe57a">↓</span> / <span style="color:#ffe57a">S</span>) or scroll down to go back<br><span style="color:#a6f56a">← →</span> or <span style="color:#a6f56a">A / D</span> to steer &nbsp;·&nbsp; push the plank over the broken span &nbsp;·&nbsp; the foam wall collapses on one touch</div>
 
 <div id="pad">
-  <button class="pbtn" id="btnBack" aria-label="roll back"><i>▼</i>BACK</button>
-  <button class="pbtn" id="btnFwd" aria-label="roll forward"><i>▲</i>ROLL</button>
+  <button class="pbtn" id="btnBack" aria-label="roll back, down arrow or S"><i>▼</i>BACK<span class="k">↓ / S</span></button>
+  <button class="pbtn" id="btnFwd" aria-label="roll forward, up arrow or W"><i>▲</i>ROLL<span class="k">↑ / W</span></button>
 </div>
 
 <div id="flash"></div>
@@ -158,7 +159,7 @@
 <div id="center">
   <h1>BLOCKY<span>ROLL</span></h1>
   <p>Roll the slime ball along the floating<br>sky-bridge and through the nether portal at the end.<br>Every level is the same length — push the loose plank<br>down over the broken span and dodge what is left.<br>From level 4 a foam wall blocks the way: roll into it<br>and it bursts in one hit. Roll into the air and the level restarts.</p>
-  <p><b>SCROLL</b> or hold <b>▲ ROLL</b> to go forward, <b>▼ BACK</b> to go back<br><span class="key">A</span><span class="key">D</span> / <span class="key">←</span><span class="key">→</span> to steer</p>
+  <p>Hold <b>▲ ROLL</b> — <span class="key">↑</span><span class="key">W</span> — or <b>SCROLL</b> up to go forward<br>hold <b>▼ BACK</b> — <span class="key">↓</span><span class="key">S</span> — or scroll down to go back &nbsp;·&nbsp; <span class="key">←</span><span class="key">→</span> or <span class="key">A</span><span class="key">D</span> to steer</p>
   <button id="startbtn">START ROLLING</button>
 </div>
 
@@ -320,8 +321,7 @@ const game = {
 };
 
 const level = () => LEVELS[game.level];
-const keys = { left: false, right: false, up: false, down: false,
-               padFwd: false, padBack: false, hold: false };
+const keys = { left: false, right: false, fwd: false, back: false, hold: false };
 
 /* ------------------ BLOCKS, HOLES AND THE BROKEN SPAN ------------- *
  * Nothing on the bridge moves any more. Solid blocks sit against a wall
@@ -1128,12 +1128,16 @@ function update(dt) {
     if (game.stateT > 1.25) startLevel();
     return;
   }
+  // the keys and the on-screen buttons set the same two flags, so the button
+  // faces are painted straight from them
+  btnFwdEl.classList.toggle('on', keys.fwd);
+  btnBackEl.classList.toggle('on', keys.back);
   if (game.state !== 'play') { game.camX = lerp(game.camX, game.x, 1 - Math.exp(-dt * 4)); return; }
 
   // ---- scrolling, or the on-screen buttons, drive the ball along ----
   let sc = 0;
-  if (keys.down || keys.padFwd) sc += 1;
-  if (keys.up || keys.padBack) sc -= 1;
+  if (keys.fwd) sc += 1;
+  if (keys.back) sc -= 1;
   if (sc) game.scroll = clamp(game.scroll + sc * 460 * dt, 0, L.len + 40);
   game.scroll = clamp(game.scroll, 0, L.len + 40);
   game.y = clamp(lerp(game.y, game.scroll, Math.min(1, dt * 15)), 0, L.len + 40);
@@ -1271,17 +1275,25 @@ function scrollInput(dy) {
 
 window.addEventListener('wheel', e => {
   e.preventDefault();
-  scrollInput(e.deltaY * 0.75);
+  /* scroll up = roll forward, the same way up the ▲ ROLL button, the up arrow,
+     W and an upward drag all roll forward */
+  scrollInput(-e.deltaY * 0.75);
 }, { passive: false });
 
 const KEYMAP = {
   ArrowLeft: 'left', a: 'left', A: 'left',
   ArrowRight: 'right', d: 'right', D: 'right',
-  ArrowUp: 'up', w: 'up', W: 'up',
-  ArrowDown: 'down', s: 'down', S: 'down',
+  ArrowUp: 'fwd', w: 'fwd', W: 'fwd',
+  ArrowDown: 'back', s: 'back', S: 'back',
 };
 window.addEventListener('keydown', e => {
-  if (KEYMAP[e.key]) { keys[KEYMAP[e.key]] = true; e.preventDefault(); UI.hint.classList.add('dim'); }
+  if (KEYMAP[e.key]) {
+    /* the same two keys the on-screen buttons use, so a stale key can never
+       leave the ball rolling */
+    if (game.state === 'menu' || game.state === 'win') restartGame();
+    keys[KEYMAP[e.key]] = true; e.preventDefault();
+    UI.hint.classList.add('dim');
+  }
   if (e.key === ' ' || e.key === 'Enter') {
     e.preventDefault();
     if (game.state === 'menu' || game.state === 'win') restartGame();
@@ -1307,7 +1319,7 @@ cvs.addEventListener('pointermove', e => {
   const dx = e.clientX - drag.x, dy = e.clientY - drag.y;
   drag.x = e.clientX; drag.y = e.clientY;
   if (game.state !== 'play') return;
-  scrollInput(-dy * 2.1);                       // drag up = roll down
+  scrollInput(-dy * 2.1);                       // drag up = roll forward, drag down = roll back
   game.vx = clamp(game.vx + dx * 7, -430, 430);
 });
 cvs.addEventListener('pointerup', e => { if (drag && e.pointerId === drag.id) drag = null; });
@@ -1316,14 +1328,16 @@ document.getElementById('startbtn').addEventListener('click', e => { e.stopPropa
 
 /* The two roll buttons: hold one down and the ball rolls that way for as
  * long as you hold it. A press from the menu starts the game. */
+const btnFwdEl = document.getElementById('btnFwd');
+const btnBackEl = document.getElementById('btnBack');
 function holdButton(el, name) {
   const down = e => {
     e.preventDefault();
     if (game.state === 'menu' || game.state === 'win') restartGame();
-    keys[name] = true; el.classList.add('on');
+    keys[name] = true;
     UI.hint.classList.add('dim');
   };
-  const up = () => { keys[name] = false; el.classList.remove('on'); };
+  const up = () => { keys[name] = false; };
   window.addEventListener('blur', up);
   el.addEventListener('pointerdown', e => { down(e); try { el.setPointerCapture(e.pointerId); } catch (err) {} });
   el.addEventListener('pointerup', up);
@@ -1331,8 +1345,8 @@ function holdButton(el, name) {
   el.addEventListener('lostpointercapture', up);
   el.addEventListener('contextmenu', e => e.preventDefault());
 }
-holdButton(document.getElementById('btnFwd'), 'padFwd');
-holdButton(document.getElementById('btnBack'), 'padBack');
+holdButton(btnFwdEl, 'fwd');
+holdButton(btnBackEl, 'back');
 
 /* ============================== LOOP ============================== */
 let last = 0;
