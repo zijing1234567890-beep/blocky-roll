@@ -122,14 +122,14 @@
   <div id="barwrap"><div id="fill"></div></div>
 </div>
 
-<div id="hint">SCROLL DOWN to roll &nbsp;·&nbsp; <span style="color:#a6f56a">A / D</span> or <span style="color:#a6f56a">← →</span> to steer</div>
+<div id="hint">SCROLL DOWN to roll &nbsp;·&nbsp; <span style="color:#a6f56a">A / D</span> or <span style="color:#a6f56a">← →</span> to steer &nbsp;·&nbsp; push the plank over the broken span &nbsp;·&nbsp; roll into the foam wall to smash it</div>
 
 <div id="flash"></div>
 <div id="toast"><div class="lt"></div><div class="ls"></div></div>
 
 <div id="center">
   <h1>BLOCKY<span>ROLL</span></h1>
-  <p>Roll the slime ball along the floating<br>sky-bridge and into the portal at the end.<br>6 levels. Each one gets meaner.</p>
+  <p>Roll the slime ball along the floating<br>sky-bridge and through the nether portal at the end.<br>Every level is the same length — push the loose plank<br>down over the broken span and dodge what is left.<br>From level 4 a foam wall blocks the way: roll into it<br>until it bursts. Roll into the air and the level restarts.</p>
   <p><b>SCROLL</b> to roll &nbsp; <span class="key">A</span><span class="key">D</span> / <span class="key">←</span><span class="key">→</span> to steer</p>
   <button id="startbtn">START ROLLING</button>
 </div>
@@ -239,24 +239,31 @@ const THEMES = {
 };
 
 /* ---------------------------- LEVELS ------------------------------ *
- * len    world length (how far you scroll)
+ * Every level is the same length — the difficulty comes from how tight,
+ * how wiggly and how cluttered each bridge is, never from its length.
+ * len    how far you scroll (identical on every level)
  * amp    how wide the path wiggles
  * freq   how tight the wiggles are
  * half   corridor half-width (smaller = harder)
  * narrow how much the corridor pinches (0..0.2)
- * obs    number of sliding blocks
+ * blocks solid blocks on the deck you have to steer around
+ * holes  holes in the deck: roll in and you drop into the air
+ * gap    how long the broken span is — the plank you have to push across it
+ * foam   how many shoves a foam wall across the bridge takes to smash
+ *        (0 = no foam wall; from NIGHT CAVES on you have to break one)
  *
  * amp * freq * 1.463 is the path's steepest sideways slope (world x per
  * world y). It is tuned upward level by level but stays under the ball's
  * top sideways speed, so a good player can always follow the path.
  * ------------------------------------------------------------------ */
+const LEN = 3000;
 const LEVELS = [
-  { name: 'MEADOW',       len: 2800, amp:  91, freq: 0.00337, half: 88, narrow: 0.00, theme: 'day',    obs: 0 },
-  { name: 'FOREST',       len: 3100, amp: 112, freq: 0.00365, half: 76, narrow: 0.05, theme: 'forest', obs: 3 },
-  { name: 'SUNSET RIDGE', len: 3400, amp: 139, freq: 0.00370, half: 66, narrow: 0.08, theme: 'sunset', obs: 6 },
-  { name: 'NIGHT CAVES',  len: 3700, amp: 172, freq: 0.00357, half: 58, narrow: 0.11, theme: 'night',  obs: 8 },
-  { name: 'THE NETHER',   len: 4000, amp: 207, freq: 0.00346, half: 52, narrow: 0.14, theme: 'nether', obs: 10 },
-  { name: 'THE END',      len: 4300, amp: 244, freq: 0.00336, half: 47, narrow: 0.17, theme: 'end',    obs: 12 },
+  { name: 'MEADOW',       len: LEN, amp:  91, freq: 0.00337, half: 88, narrow: 0.00, theme: 'day',    blocks: 2, holes: 1, gap: 190, foam: 0 },
+  { name: 'FOREST',       len: LEN, amp: 112, freq: 0.00365, half: 80, narrow: 0.04, theme: 'forest', blocks: 2, holes: 1, gap: 200, foam: 0 },
+  { name: 'SUNSET RIDGE', len: LEN, amp: 139, freq: 0.00370, half: 72, narrow: 0.07, theme: 'sunset', blocks: 3, holes: 1, gap: 215, foam: 0 },
+  { name: 'NIGHT CAVES',  len: LEN, amp: 168, freq: 0.00350, half: 68, narrow: 0.08, theme: 'night',  blocks: 3, holes: 2, gap: 230, foam: 2 },
+  { name: 'THE NETHER',   len: LEN, amp: 200, freq: 0.00342, half: 58, narrow: 0.12, theme: 'nether', blocks: 4, holes: 2, gap: 245, foam: 3 },
+  { name: 'THE END',      len: LEN, amp: 236, freq: 0.00332, half: 52, narrow: 0.15, theme: 'end',    blocks: 5, holes: 2, gap: 260, foam: 4 },
 ];
 
 /* Path centre line, in world x, for a given world y. Two harmonics
@@ -279,45 +286,123 @@ function halfAt(y, L) {
 const game = {
   level: 0, y: 0, scroll: 0, x: 0, vx: 0,
   camX: 0, camY: 0, shake: 0, time: 0,
-  state: 'menu',           // menu | play | teleport | win
+  state: 'menu',           // menu | play | teleport | win | falling
   stateT: 0, bumps: 0, bumpCd: 0,
-  obstacles: [],
+  blocks: [], holes: [], gap: null, foam: null, fallZ: 0,
 };
 
 const level = () => LEVELS[game.level];
 const keys = { left: false, right: false, up: false, down: false, hold: false };
 
-/* Sliding blocks. A block's centre stays inside the strip [left wall +
- * w/2, left wall + w/2 + travel], and its width plus travel is capped by
- * the corridor width minus GAP — so whichever side the block is on, at
- * least GAP px of free path is always left for the ball. */
-const GAP = BALL_R * 2 + 14;
-function buildObstacles(L) {
-  const list = [];
-  for (let i = 0; i < L.obs; i++) {
-    const t = (i + 0.75) / (L.obs + 0.55);
-    const y = clamp(L.len * t + (hash2(i * 3.7, 11.3) - 0.5) * 200, 600, L.len - 600);
-    const cx = cxAt(y, L), hw = halfAt(y, L);
-    const room = 2 * hw - GAP;                       // space the block may occupy
-    if (room < 34) continue;                         // corridor too tight — no block here
-    const w = Math.min(96, room * 0.62);
-    list.push({
-      y, w, h: 26, travel: room - w,
-      cx, hw, baseX: cx - hw + w / 2,
-      spd: 0.7 + hash2(i * 5.1, 2.2) * 0.9,
-      phase: hash2(i * 2.3, 7.7) * TAU,
-      kind: i % 3,
-    });
+/* ------------------ BLOCKS, HOLES AND THE BROKEN SPAN ------------- *
+ * Nothing on the bridge moves any more. Solid blocks sit against a wall
+ * and always leave the ball a lane on the other side; holes are missing
+ * deck you can drop through; and the broken span is crossed by pushing
+ * the loose plank over it.
+ * ------------------------------------------------------------------ */
+const GAP = BALL_R * 2 + 14;      // lane always left free beside a block
+const HOLE_LEN = 74;              // how long a deck hole is along the path
+const SPAN_AT = 0.44;             // where the broken span sits on every level
+const PLANK_TH = 9;               // plank thickness
+const WALL_BACK = 190;            // how far past the span the foam wall stands
+const WALL_CD = 0.42;             // seconds between shoves into the wall
+
+/* Spread n positions evenly over a list of [from, to] ranges. */
+function slots(ranges, n) {
+  const total = ranges.reduce((s, r) => s + (r[1] - r[0]), 0);
+  const out = [];
+  if (!ranges.length || total <= 0) return out;
+  for (let k = 0; k < n; k++) {
+    let d = total * (k + 0.5) / n;
+    let y = ranges[ranges.length - 1][1];
+    for (const [a, b] of ranges) {
+      if (d <= b - a) { y = a + d; break; }
+      d -= b - a;
+    }
+    out.push(y);
   }
-  return list;
+  return out;
 }
-function obstacleX(o) {
-  return o.baseX + (0.5 + 0.5 * Math.sin(game.time * o.spd + o.phase)) * o.travel;
+
+function buildLevel(L) {
+  const gx = cxAt(L.len * SPAN_AT, L), ghw = halfAt(L.len * SPAN_AT, L);
+  const gap = {
+    y: L.len * SPAN_AT, len: L.gap,
+    w: Math.round(2 * ghw * 0.62),        // plank is this wide, in x
+    hinge: gx - ghw + 6,                  // the deck edge the plank is hinged to
+    cx: gx, hw: ghw,
+    angle: Math.PI / 2, t: 0, toppling: false, down: false,
+  };
+  const wall = L.foam ? buildFoam(L, gap) : null;
+  // The run-up to the span and the landing after it stay clear, so the
+  // player always has room to line up with the plank — and so the foam
+  // wall, which stands in that landing, can never sit on an obstacle.
+  const ranges = [[600, gap.y - 340], [gap.y + gap.len + 320, L.len - 470]];
+  const n = L.blocks + L.holes;
+  const ys = slots(ranges, n);
+  const kinds = [];
+  for (let k = 0; k < n; k++) {
+    const nb = kinds.filter(x => x === 'b').length, nh = kinds.filter(x => x === 'h').length;
+    kinds.push(((k % 2 === 0 && L.blocks - nb > 0) || L.holes - nh <= 0) ? 'b' : 'h');
+  }
+
+  const blocks = [], holes = [];
+  ys.forEach((y, k) => {
+    const cx = cxAt(y, L), hw = halfAt(y, L);
+    if (kinds[k] === 'b') {
+      const room = 2 * hw - GAP;                   // space a block may take up
+      if (room < 40) return;                       // corridor too tight for a block
+      const w = Math.min(104, room * 0.6);
+      const side = hash2(k * 5.1, 2.2) < 0.5 ? -1 : 1;
+      blocks.push({ y, w, h: 26, cx, hw, x: cx + side * (hw - w / 2 - 5), kind: k % 3 });
+    } else {
+      const reach = hw - BALL_R;                   // how far the ball's centre can wander
+      const w = Math.min(46, 2 * reach - 36);      // leaves a squeeze-past lane (>=45px)
+      if (w < 24) return;
+      const side = hash2(k * 2.9, 6.1) < 0.5 ? -1 : 1;
+      holes.push({ y, len: HOLE_LEN, w, cx, hw, side, x: cx + side * (reach - 6 - w / 2) });
+    }
+  });
+  return { gap, blocks, holes, foam: wall };
 }
-/* How much free path is left on each side of a block right now. */
-function blockRooms(o) {
-  const ox = obstacleX(o);
-  return { left: (ox - o.w / 2) - (o.cx - o.hw), right: (o.cx + o.hw) - (ox + o.w / 2) };
+
+/* The foam wall stands across the bridge a little past the broken span,
+ * inside the landing run that stays clear of every other obstacle, so it
+ * is always met head-on. One Minecraft block deep, two blocks tall. */
+function buildFoam(L, gap) {
+  const y = gap.y + gap.len + WALL_BACK;
+  const cx = cxAt(y, L), hw = halfAt(y, L);
+  // The ball is stopped a ball-width short of the wall, so it can sit just
+  // outside the corridor at the wall's own y. Cover the whole span it can
+  // reach on the way in, a little past the kerb on each side.
+  let x0 = Infinity, x1 = -Infinity;
+  for (let yy = y - WALL_D / 2 - 2 * BALL_R; yy <= y + WALL_D / 2; yy += 2) {
+    x0 = Math.min(x0, cxAt(yy, L) - halfAt(yy, L));
+    x1 = Math.max(x1, cxAt(yy, L) + halfAt(yy, L));
+  }
+  x0 -= BX * 0.5; x1 += BX * 0.5;
+  const nx = Math.max(3, Math.round((x1 - x0) / BX));   // whole blocks across
+  const cw = (x1 - x0) / nx;
+  const cells = [];
+  for (let i = 0; i < nx; i++) {
+    cells.push({ x: x0 + (i + 0.5) * cw, w: cw, tone: hash2(i * 4.3 + 0.7, 3.1) });
+  }
+  return { y, cx, hw, nx, cw, cells, hp: L.foam, hpMax: L.foam, cd: 0, broken: false, chunks: [] };
+}
+const plankX = g => g.hinge + g.w / 2;
+const gapOpen = g => g.angle < 0.22;            // plank far enough down to roll onto
+/* A gap or hole only carries the ball once the plank is down across it. */
+function overSpan() {
+  const g = game.gap;
+  if (!g) return false;
+  if (game.y <= g.y - 2 || game.y >= g.y + g.len + 2) return false;
+  return !(g.down && Math.abs(game.x - plankX(g)) < g.w / 2 - 3);
+}
+function overHole() {
+  for (const h of game.holes) {
+    if (Math.abs(game.y - h.y) <= h.len / 2 && Math.abs(game.x - h.x) < h.w / 2 - 2) return h;
+  }
+  return null;
 }
 
 /* =========================== RENDER =============================== *
@@ -335,7 +420,12 @@ const FOC_MUL = 0.86;            // focal length = this * window height
 const NEAR = 26;                 // near clipping distance
 const FOG_START = 300, FOG_END = 1150, FOG_CULL = 1140;
 const BX = 26, BROW = 26;        // bridge block width / row spacing
-const WALL_H = 44;               // corridor wall height
+const WALL_H = BX * 2;           // foam wall: two Minecraft blocks tall
+const WALL_D = BX * 0.9;         // and one block deep along the path
+const KERB_H = 9;                // low kerb along the very edge of the deck
+const POST_H = 30;               // fence post above the kerb
+const RAIL_A = 13, RAIL_B = 25;  // height of the two fence rails above the kerb
+const RAIL_T = 5;                // rail thickness
 const CAM_LAG = 46;              // how far the camera may trail the ball sideways
 
 const cam = { x: 0, y: 0, z: 0, pitch: 0.4, cp: 1, sp: 0, foc: 600, hz: 0, shx: 0, shy: 0 };
@@ -388,6 +478,7 @@ const css = c => 'rgb(' + (c[0] | 0) + ',' + (c[1] | 0) + ',' + (c[2] | 0) + ')'
 
 const PAL = {
   path: [], edge: [], rock: [], grass: [], cloud: [], ball: [],
+  wood: [], obsidian: [], portal: [], foam: [],
   haze: [0, 0, 0], skyTop: [0, 0, 0], skyBot: [0, 0, 0],
   skyBelow: '#000', star: false, key: '',
 };
@@ -405,6 +496,13 @@ function buildPalette(th) {
     mixRGB([255, 255, 255], PAL.haze, 0.42),
   ];
   PAL.ball = [rgbOf('#c6ff8a'), rgbOf('#7fd23f'), rgbOf('#41801f')];
+  const wood = rgbOf(th.trunk);
+  PAL.wood = [shade(wood, 1.22), wood, shade(wood, 0.78)];
+  PAL.obsidian = [rgbOf('#31204a'), rgbOf('#180f26'), rgbOf('#0b0714')];
+  PAL.portal = [rgbOf('#b46cff'), rgbOf('#7a2fd6'), rgbOf('#e6c2ff')];
+  // foam wall: pale, slightly bluish, so it reads as a soft spongy block
+  // against every theme's deck
+  PAL.foam = [rgbOf('#eaf7ff'), rgbOf('#c9e6f4'), rgbOf('#a9cfe4')];
   PAL.skyBelow = css(mixRGB(PAL.skyBot, PAL.skyTop, 0.22));
   PAL.deep = css(shade(PAL.skyBot, 0.72));
   PAL.star = !!th.star;
@@ -633,9 +731,21 @@ function drawDecor() {
 }
 
 /* ---------------------------- BRIDGE ------------------------------ */
+/* Which hole (if any) is under this deck block. pad lets the caller also
+ * find the blocks that merely touch a hole — those are drawn as the dark
+ * broken rim of missing deck. */
+function holeAt(bx, y, padX, padY) {
+  for (const h of game.holes) {
+    if (Math.abs(y - h.y) <= h.len / 2 + padY && Math.abs(bx - h.x) <= h.w / 2 + padX) return h;
+  }
+  return null;
+}
+
 function drawBridge(th, L) {
+  const g = game.gap;
   const first = Math.floor(cam.y / BROW);
   const last = Math.ceil((cam.y + FOG_CULL) / BROW);
+  const wood = PAL.wood;
   for (let r = first; r <= last; r++) {
     const y = r * BROW;
     if (y < -BROW) continue;
@@ -644,68 +754,157 @@ function drawBridge(th, L) {
     const fogT = (depthAt(c, y, 0) - FOG_START) / (FOG_END - FOG_START);
     if (fogT >= 0.995) continue;
 
-    for (let i = -half; i <= half; i++) {
-      const bx = c + i * BX;
-      const h = hash2(bx * 0.31 + 0.5, y * 0.27 + 1.7);
-      const col = PAL.path[(h * PAL.path.length) | 0];
-      box(bx, y, 0, BX, BROW, PATH_TOP, col, null, null);
+    // the broken span: the deck simply stops, and the plank covers it later
+    const inGap = g && y > g.y - BROW * 0.5 && y < g.y + g.len + BROW * 0.5;
+    if (!inGap) {
+      const cutNear = g && Math.abs(y + BROW * 0.5 - g.y) < BROW * 0.6;
+      const cutFar = g && Math.abs(y - BROW * 0.5 - g.y - g.len) < BROW * 0.6;
+      for (let i = -half; i <= half; i++) {
+        const bx = c + i * BX;
+        if (holeAt(bx, y, -1, -1)) continue;             // missing deck: a hole
+        const broken = !!holeAt(bx, y, BX, BROW);
+        const h = hash2(bx * 0.31 + 0.5, y * 0.27 + 1.7);
+        const col = PAL.path[(h * PAL.path.length) | 0];
+        const top = broken ? shade(col, 0.62) : col;
+        // the raw cut ends of the deck at the span get a front face, so the
+        // break reads as a broken bridge and not as an open edge
+        const front = (cutNear || cutFar) ? shade(col, 0.8) : null;
+        box(bx, y, 0, BX, BROW, PATH_TOP, top, null, front);
+      }
     }
 
-    // The parapet sits flush with the outer deck block, so the bridge has no
-    // visible seam and no hole where deck meets wall.
+    // Railing along both edges: a low kerb, fences with two rails and a
+    // post every other row, all sitting flush on the outer deck block.
+    if (inGap) continue;
     const edge = half * BX + BX * 0.5;
-    const wh = WALL_H * (0.7 + hash2(r * 1.7, 3.3) * 0.6);
-    const eT = PAL.edge[(hash2(r * 2.3, 8.1) * PAL.edge.length) | 0];
-    const eS = PAL.edge[(hash2(r * 3.1, 4.4) * PAL.edge.length) | 0];
+    const post = (r & 1) === 0;
+    const kerb = shade(wood[1], 0.66);
     for (const sideSign of [-1, 1]) {
       const wx = c + sideSign * (edge + BX * 0.5);
-      box(wx, y, PATH_TOP, BX, BROW, wh, eT, eS, shade(eS, 0.82));
+      box(wx, y, PATH_TOP, BX, BROW, KERB_H, wood[0], wood[1], kerb);
+      if (post) box(wx, y, PATH_TOP + KERB_H, BX, BROW, POST_H, wood[0], wood[1], shade(wood[2], 1.05));
+      box(wx, y, PATH_TOP + KERB_H + RAIL_A, BX * 0.5, BROW * 2, RAIL_T,
+        shade(wood[0], 1.08), wood[0], shade(wood[1], 0.9));
+      box(wx, y, PATH_TOP + KERB_H + RAIL_B, BX * 0.5, BROW * 2, RAIL_T,
+        shade(wood[0], 1.08), wood[0], shade(wood[1], 0.9));
     }
   }
 }
 
-/* ------------------ SLIDING BLOCKS AND THE PORTAL ----------------- */
-function drawObstacles() {
-  for (const o of game.obstacles) {
-    const x = obstacleX(o), y = o.y;
-    if (depthAt(x, y, 0) > FOG_CULL || depthAt(x, y, 0) < -140) continue;
+/* ------------------ SOLID BLOCKS, THE PLANK, THE PORTAL ------------ */
+function drawBlocks() {
+  for (const o of game.blocks) {
+    const d = depthAt(o.x, o.y, 0);
+    if (d > FOG_CULL || d < -140) continue;
     const base = rgbOf(o.kind === 0 ? '#5a5a66' : o.kind === 1 ? '#6b5a4a' : '#4a5a66');
-    const lift = PATH_TOP + Math.sin(game.time * 2.4 + o.phase) * 1.5;
-    spot(x, y, PATH_TOP + 1, o.w * 0.62, 'rgba(0,0,0,.22)');
-    box(x, y, lift, o.w, 34, 30, shade(base, 1.2), base, shade(base, 0.78));
-    box(x, y, lift + 30, o.w * 0.9, 12, 5, rgbOf('#ffdc5a'), rgbOf('#c9a72f'), null);
+    spot(o.x, o.y, PATH_TOP + 1, o.w * 0.62, 'rgba(0,0,0,.22)');
+    box(o.x, o.y, PATH_TOP, o.w, o.h, 30, shade(base, 1.25), base, shade(base, 0.78));
+    // a lighter cap block, so the top reads as its own Minecraft block
+    box(o.x, o.y, PATH_TOP + 30, o.w * 0.94, o.h * 0.6, 6, shade(base, 1.4), shade(base, 1.05), shade(base, 0.72));
   }
 }
 
-function drawGate(th, L, portalT) {
+/* The foam wall: pale spongy Minecraft-ish blocks across the bridge. It
+ * dims as it takes hits and bursts into tumbling cubes when it goes. */
+function drawFoam(th) {
+  const fo = game.foam;
+  if (!fo) return;
+  const d0 = depthAt(fo.cx, fo.y, PATH_TOP);
+  if (d0 > FOG_CULL + 240 || d0 < -280) return;
+  const fm = PAL.foam;
+  if (!fo.broken) {
+    const dam = fo.hpMax ? fo.hp / fo.hpMax : 1;      // 1 = fresh, lower = cracked
+    for (const c of fo.cells) {
+      const k = (0.9 + c.tone * 0.22) * (0.6 + 0.4 * dam);
+      box(c.x, fo.y, PATH_TOP, c.w, WALL_D, WALL_H,
+        shade(fm[0], k * 1.06), shade(fm[1], k), shade(fm[2], k));
+      // a lighter cap block, so each cell reads as its own foam brick
+      box(c.x, fo.y, PATH_TOP + WALL_H, c.w * 0.62, WALL_D * 0.55, 6,
+        shade(fm[0], 1.1), fm[0], shade(fm[1], 0.94));
+    }
+    spot(fo.cx, fo.y - WALL_D, PATH_TOP + 1, fo.hw * 1.05, 'rgba(255,255,255,.14)');
+  }
+  for (const c of fo.chunks) {
+    const k = clamp(c.life / 1.7, 0, 1);
+    const col = shade(fm[0], 0.5 + 0.5 * k);
+    box(c.x, c.y, c.z, c.s, c.s, c.s, col, shade(col, 0.86), shade(col, 0.94));
+  }
+}
+
+/* The loose plank over the broken span. It hinges on the near deck edge and
+ * tips all the way over when the ball rolls into it. Drawn segment by
+ * segment as quads, so it reads as a plank while it swings. */
+function drawSpan(th, L) {
+  const g = game.gap;
+  if (!g) return;
+  const d0 = depthAt(g.cx, g.y, 0);
+  if (d0 > FOG_CULL + 260 || d0 < -420) return;
+  const wood = PAL.wood;
+  const hy = g.y, hz = PATH_TOP - PLANK_TH / 2 + 1;
+  const cs = Math.cos(g.angle), sn = Math.sin(g.angle);
+  const segs = 6, segLen = g.len / segs, ht = PLANK_TH / 2;
+  // plank frame: t runs along the plank, s across its thickness
+  const P = (x, t, s) => [x, hy + t * cs - s * sn, hz + t * sn + s * cs];
+  const top = [], bot = [];
+  for (let i = 0; i <= segs; i++) {
+    const t = i * segLen;
+    top.push([P(g.hinge, t, ht), P(g.hinge + g.w, t, ht)]);
+    bot.push([P(g.hinge, t, -ht), P(g.hinge + g.w, t, -ht)]);
+  }
+  for (let i = 0; i < segs; i++) {
+    const col = wood[i % wood.length];
+    const a = top[i][0], b = top[i][1], c = top[i + 1][1], e = top[i + 1][0];
+    const a2 = bot[i][0], b2 = bot[i][1], c2 = bot[i + 1][1], e2 = bot[i + 1][0];
+    quad(a[0], a[1], a[2], b[0], b[1], b[2], c[0], c[1], c[2], e[0], e[1], e[2], col);
+    quad(e2[0], e2[1], e2[2], c2[0], c2[1], c2[2], b2[0], b2[1], b2[2], a2[0], a2[1], a2[2], shade(col, 0.7));
+    // the two long sides, so the plank has mass when it is standing up
+    quad(a[0], a[1], a[2], e[0], e[1], e[2], e2[0], e2[1], e2[2], a2[0], a2[1], a2[2], shade(col, 0.85));
+    quad(b2[0], b2[1], b2[2], c2[0], c2[1], c2[2], c[0], c[1], c[2], b[0], b[1], b[2], shade(col, 0.85));
+  }
+  // far end cap, so you see the plank's end when it is standing up
+  const e1 = top[segs][0], e2 = top[segs][1], e3 = bot[segs][1], e4 = bot[segs][0];
+  quad(e1[0], e1[1], e1[2], e2[0], e2[1], e2[2], e3[0], e3[1], e3[2], e4[0], e4[1], e4[2], shade(wood[0], 0.9));
+}
+
+/* A Minecraft nether portal: obsidian frame, purple shimmering plane. */
+function drawGate(th, L) {
   const gy = L.len, gx = cxAt(gy, L);
   const d = depthAt(gx, gy, PATH_TOP);
   if (d > FOG_CULL + 120 || d < -220) return;
-  const hw = Math.min(halfAt(gy, L) - 2, 74), h = 96;
-  const fr = rgbOf('#241436'), fr2 = rgbOf('#1b0f2b');
+  const hw = Math.max(40, halfAt(gy, L)), h = 78;      // opening: 3 blocks wide, 3 tall
+  const fs = BX;                                       // frame block size (one Minecraft block)
+  const ob = PAL.obsidian, po = PAL.portal;
   const pulse = 0.55 + 0.45 * Math.sin(game.time * 3);
 
-  quad(gx - hw, gy, PATH_TOP + 6, gx - hw, gy, PATH_TOP + 6 + h,
-       gx + hw, gy, PATH_TOP + 6 + h, gx + hw, gy, PATH_TOP + 6, 'rgba(58,22,104,.95)');
-  spot(gx, gy, PATH_TOP + 6 + h * 0.5, hw * 1.05, 'rgba(186,104,255,' + (0.2 + 0.18 * pulse) + ')');
+  // the shimmering portal plane
+  quad(gx - hw, gy, PATH_TOP, gx - hw, gy, PATH_TOP + h,
+       gx + hw, gy, PATH_TOP + h, gx + hw, gy, PATH_TOP, css(shade(po[1], 0.72)));
+  for (let i = -1; i <= 1; i++) {
+    const sw = hw / 1.5, x0 = gx + i * sw - sw * 0.3, x1 = x0 + sw * 0.6;
+    const k = 0.35 + 0.55 * Math.sin(game.time * 2.1 + i * 2.3);
+    const z0 = PATH_TOP + ((i + 1.6) * h / 3.1) + Math.sin(game.time * 1.7 + i) * 5;
+    // a hair in front of the plane, so the patches are not hidden by it
+    quad(x0, gy - 0.6, z0, x0, gy - 0.6, z0 + h * 0.4, x1, gy - 0.6, z0 + h * 0.4, x1, gy - 0.6, z0,
+      css(mixRGB(po[0], po[2], k)));
+  }
+  spot(gx, gy, PATH_TOP + h * 0.5, hw * 1.08, 'rgba(186,104,255,' + (0.18 + 0.16 * pulse).toFixed(3) + ')');
   const f = newFace();
   f.d = d - 0.4; f.kind = 4; f.c = '';
-  f.p[0] = gx; f.p[1] = gy; f.p[2] = PATH_TOP + 6 + h * 0.5; f.p[3] = hw * 0.55;
+  f.p[0] = gx; f.p[1] = gy; f.p[2] = PATH_TOP + h * 0.5; f.p[3] = hw * 0.6;
   f.a = String(pulse);
 
-  // obsidian frame: two pillars and a lintel
-  const fs = 18;
-  for (let z = 0; z < h + fs; z += fs) {
-    box(gx - hw - fs * 0.5, gy, PATH_TOP + z, fs, fs, fs, fr, fr2, fr2);
-    box(gx + hw + fs * 0.5, gy, PATH_TOP + z, fs, fs, fs, fr, fr2, fr2);
+  // obsidian frame: a pillar each side, a lintel across the top
+  for (let z = 0; z < h; z += fs) {
+    box(gx - hw - fs / 2, gy, PATH_TOP + z, fs, fs, fs, ob[0], ob[1], ob[2]);
+    box(gx + hw + fs / 2, gy, PATH_TOP + z, fs, fs, fs, ob[0], ob[1], ob[2]);
   }
   for (let x = -hw - fs; x <= hw; x += fs) {
-    box(gx + x, gy, PATH_TOP + h, fs, fs, fs, fr, fr2, fr2);
+    box(gx + x, gy, PATH_TOP + h, fs, fs, fs, ob[0], ob[1], ob[2]);
   }
   if (game.state === 'teleport') {
     for (let k = 0; k < 3; k++) {
       const t = (portalT * 1.3 + k / 3) % 1;
-      spot(gx, gy, PATH_TOP + 6 + h * 0.5, 20 + t * 260, 'rgba(226,190,255,' + (1 - t) * 0.5 + ')');
+      spot(gx, gy, PATH_TOP + h * 0.5, 20 + t * 260, 'rgba(226,190,255,' + (1 - t) * 0.5 + ')');
     }
   }
 }
@@ -713,9 +912,9 @@ function drawGate(th, L, portalT) {
 /* ----------------------------- BALL ------------------------------- */
 function drawBall(th) {
   const r = BALL_R * ballScale;
-  const z = PATH_TOP + r;
+  const z = PATH_TOP + r + game.fallZ;          // fallZ drops the ball into the air
   const d = depthAt(game.x, game.y, z);
-  spot(game.x + r * 0.25, game.y + r * 0.3, PATH_TOP + 1.5, r * 1.02, 'rgba(0,0,0,.32)');
+  if (game.state !== 'falling') spot(game.x + r * 0.25, game.y + r * 0.3, PATH_TOP + 1.5, r * 1.02, 'rgba(0,0,0,.32)');
   if (d > FOG_CULL) return;
   const f = newFace();
   // The player must always see the ball: pull it a hair nearer so a block in
@@ -747,7 +946,9 @@ function render(portalT) {
   drawSky(th);
   drawDecor();
   drawBridge(th, L);
-  drawObstacles();
+  drawSpan(th, L);
+  drawBlocks();
+  drawFoam(th);
   drawGate(th, L, portalT);
   drawBall(th);
   drawFaces();
@@ -781,13 +982,49 @@ function startLevel() {
   game.y = 0; game.scroll = 0;
   game.x = cxAt(0, L); game.vx = 0;
   game.camX = game.x; game.camY = game.y - H * 0.34;
-  game.obstacles = buildObstacles(L);
-  game.state = 'play'; game.stateT = 0;
+  const lv = buildLevel(L);
+  game.blocks = lv.blocks; game.holes = lv.holes; game.gap = lv.gap; game.foam = lv.foam;
+  game.state = 'play'; game.stateT = 0; game.fallZ = 0;
   ballScale = 1; portalT = 0;
   UI.flash.style.opacity = '0';
   UI.lvlNum.textContent = String(game.level + 1);
   UI.lvlName.textContent = L.name;
-  toast('LEVEL ' + (game.level + 1), L.name + '  ·  ' + L.obs + ' SLIDING BLOCKS');
+  toast('LEVEL ' + (game.level + 1), L.name + '  ·  ' + (L.blocks + L.holes) +
+    ' OBSTACLES  ·  A BROKEN SPAN' + (lv.foam ? '  ·  A FOAM WALL TO SMASH' : ' TO PUSH DOWN'));
+}
+
+/* Rolled into the foam wall hard enough: it bursts into cubes that tumble
+ * off the bridge, and the way on is open. */
+function smashWall(fo) {
+  fo.broken = true; fo.hp = 0;
+  fo.chunks = [];
+  for (const c of fo.cells) {
+    for (let k = 0; k < 3; k++) {
+      fo.chunks.push({
+        x: c.x + (Math.random() - 0.5) * c.w,
+        y: fo.y + (Math.random() - 0.5) * WALL_D,
+        z: PATH_TOP + 6 + Math.random() * (WALL_H - 12),
+        vx: (Math.random() - 0.5) * 210,
+        vy: 20 + Math.random() * 170,
+        vz: 30 + Math.random() * 230,
+        s: 6 + Math.random() * 9,
+        life: 1.7,
+      });
+    }
+  }
+  game.shake = 18;
+  beep(320, 0.4, 'square', 0.06, 60);
+  toast('FOAM WALL SMASHED', 'ROLL ON — THE PORTAL IS AHEAD');
+}
+
+/* Rolled into the air: the ball drops out of the sky and the level starts
+ * over from the top. */
+function fall() {
+  if (game.state !== 'play') return;
+  game.state = 'falling'; game.stateT = 0; game.fallZ = 0;
+  game.vx = 0; game.scroll = 0;
+  beep(330, 0.75, 'sine', 0.05, 70);
+  toast('INTO THE AIR', 'LEVEL ' + (game.level + 1) + ' STARTS OVER');
 }
 
 function restartGame() {
@@ -855,6 +1092,16 @@ function update(dt) {
     }
     return;
   }
+  if (game.state === 'falling') {
+    // drop out of the sky, then start the level over
+    game.stateT += dt;
+    game.fallZ -= (70 + game.stateT * 900) * dt;
+    ballScale = Math.max(0.2, 1 - game.stateT * 0.85);
+    game.camX = lerp(game.camX, game.x, 1 - Math.exp(-dt * 4));
+    game.camY = lerp(game.camY, game.y - H * 0.34 + game.stateT * 40, 1 - Math.exp(-dt * 5));
+    if (game.stateT > 1.25) startLevel();
+    return;
+  }
   if (game.state !== 'play') { game.camX = lerp(game.camX, game.x, 1 - Math.exp(-dt * 4)); return; }
 
   // ---- scrolling drives the ball down the path ----
@@ -875,28 +1122,99 @@ function update(dt) {
   game.x += game.vx * dt;
   game.bumpCd = Math.max(0, game.bumpCd - dt);
 
-  // ---- sliding blocks ----
-  for (const o of game.obstacles) {
-    const ox = obstacleX(o);
-    const dx = game.x - ox, dy = game.y - o.y;
+  // ---- solid blocks on the deck: slow down, bump, slide past ----
+  for (const o of game.blocks) {
+    const dx = game.x - o.x, dy = game.y - o.y;
     const hx = o.w / 2 + BALL_R, hy = o.h / 2 + BALL_R;
     if (Math.abs(dx) < hx && Math.abs(dy) < hy) {
       const px = hx - Math.abs(dx), py = hy - Math.abs(dy);
       if (px < py) {
-        game.x = ox + Math.sign(dx || 1) * hx;
+        game.x = o.x + Math.sign(dx || 1) * hx;
         game.vx = -game.vx * 0.4 + Math.sign(dx || 1) * 120;
       } else {
         game.y = o.y + Math.sign(dy || 1) * hy;
         game.scroll = clamp(game.y, 0, L.len + 40);
-        // Sitting on top of a block: ease toward the open side so a run can
-        // never dead-end on a block, even if the player does nothing.
-        const r = blockRooms(o);
-        const open = r.right >= r.left ? 1 : -1;
-        game.x += open * 80 * dt;
+        // eases toward the open lane, so a run can never dead-end on a block
+        game.x += (o.x >= o.cx ? -1 : 1) * 90 * dt;
       }
       if (game.bumpCd <= 0) { bump(16); game.bumpCd = 0.25; }
     }
   }
+
+  // ---- the foam wall: shove into it until it bursts ----
+  const fo = game.foam;
+  if (fo) {
+    if (fo.broken) {
+      for (const c of fo.chunks) {
+        c.life -= dt;
+        c.x += c.vx * dt; c.y += c.vy * dt; c.z += c.vz * dt;
+        c.vy -= 300 * dt; c.vz -= 900 * dt;         // foam tumbles off the edge
+      }
+      fo.chunks = fo.chunks.filter(c => c.life > 0 && c.z > -300);
+    } else {
+      const reach = fo.y - WALL_D / 2 - BALL_R - 1;
+      if (game.y > reach - 40) {
+        game.y = Math.min(game.y, reach);
+        game.scroll = Math.min(game.scroll, reach + 34);
+        // the player has to keep rolling into it for every shove: the foam
+        // gives, then springs back, so each hit needs a fresh push
+        const pressed = game.scroll > reach + 0.5;
+        fo.cd = Math.max(0, fo.cd - dt);
+        if (pressed) {
+          game.scroll = Math.max(reach + 3, game.scroll - 210 * dt);
+          if (fo.cd <= 0) {
+            fo.cd = WALL_CD;
+            fo.hp--;
+            bump(13);
+            beep(200 - (fo.hpMax - fo.hp) * 22, 0.22, 'square', 0.05, 90);
+            if (fo.hp <= 0) smashWall(fo);
+          }
+        }
+      }
+    }
+  }
+
+  // ---- the broken span: push the loose plank down, then roll over it ----
+  const g = game.gap;
+  if (g) {
+    const px = plankX(g);
+    // "on the plank" is the same test whether you are pushing it or rolling
+    // across it: line up with the plank or you will roll past it into the air
+    const linedUp = Math.abs(game.x - px) < g.w / 2 - 3;
+    if (g.toppling && !g.down) {
+      g.t += dt;
+      const k = clamp(g.t / 0.8, 0, 1);
+      g.angle = (Math.PI / 2) * (1 - k * k);       // tips over, faster and faster
+      if (k >= 1) {
+        g.angle = 0; g.down = true;
+        game.shake = 16;
+        beep(90, 0.22, 'square', 0.06, 55);
+        if (navigator.vibrate && (!navigator.userActivation || navigator.userActivation.hasBeenActive)) {
+          try { navigator.vibrate(26); } catch (e) {}
+        }
+        toast('SPAN BRIDGED', L.foam ? 'CROSS IT, THEN SMASH THE FOAM WALL' : 'ROLL ACROSS THE PLANK');
+      }
+    }
+    if (!g.down) {
+      // rolling into the standing plank is what pushes it over, and it
+      // holds the ball back until it is far enough down to roll onto
+      const atPlank = linedUp && game.y > g.y - BALL_R - 34;
+      if (atPlank && !g.toppling) {
+        g.toppling = true; g.t = 0;
+        bump(12); game.shake = 10;
+        beep(150, 0.5, 'square', 0.05, 60);
+      }
+      if (!gapOpen(g) && atPlank) {
+        game.y = g.y - BALL_R - 34;
+        game.scroll = Math.min(game.scroll, game.y);
+        game.vx *= Math.exp(-dt * 6);
+      }
+    }
+    if (overSpan()) return fall();
+  }
+
+  // ---- holes in the deck: the ball drops straight through ----
+  if (overHole()) return fall();
 
   // ---- walls of the wiggly corridor (last, so nothing can push you out) ----
   const c = cxAt(game.y, L);
@@ -911,7 +1229,9 @@ function update(dt) {
       game.scroll = Math.max(0, game.scroll - 4);
     }
     game.scroll = Math.max(0, game.scroll - 60 * dt);  // scraping the wall costs speed
-    game.vx = -game.vx * 0.35 - side * 60;
+    // keep the steering: kill only the push into the wall (plus a gentle nudge
+    // back), so a ball that hugs a wall can always roll away from it again
+    game.vx = side * Math.min(game.vx * side, 0) - side * 30;
   }
 
   // ---- camera ----
@@ -1000,7 +1320,10 @@ game.camY = game.y - H * 0.34;
 requestAnimationFrame(frame);
 
 /* Exposed for tests / tinkering from the console. */
-window.BLOCKYROLL = { game, LEVELS, level, cxAt, screenOf, project, cam, PATH_TOP, PAL, halfAt, obstacleX, blockRooms, buildObstacles, GAP, BALL_R, startLevel, restartGame, update, render, keys, THEMES, get ballScale() { return ballScale; } };
+window.BLOCKYROLL = { game, LEVELS, LEN, level, cxAt, screenOf, project, cam, PATH_TOP, PAL, halfAt,
+  buildLevel, buildFoam, plankX, gapOpen, overSpan, overHole, GAP, HOLE_LEN, SPAN_AT, BALL_R,
+  WALL_H, WALL_D, WALL_BACK, WALL_CD,
+  startLevel, restartGame, update, render, keys, THEMES, get ballScale() { return ballScale; } };
 
 
 
