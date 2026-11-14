@@ -128,7 +128,7 @@
 
 <div id="center">
   <h1>BLOCKY<span>ROLL</span></h1>
-  <p>Roll the slime ball down the wiggly path<br>and into the portal at the end.<br>6 levels. Each one gets meaner.</p>
+  <p>Roll the slime ball along the floating<br>sky-bridge and into the portal at the end.<br>6 levels. Each one gets meaner.</p>
   <p><b>SCROLL</b> to roll &nbsp; <span class="key">A</span><span class="key">D</span> / <span class="key">←</span><span class="key">→</span> to steer</p>
   <button id="startbtn">START ROLLING</button>
 </div>
@@ -319,359 +319,410 @@ function blockRooms(o) {
   return { left: (ox - o.w / 2) - (o.cx - o.hw), right: (o.cx + o.hw) - (ox + o.w / 2) };
 }
 
-/* =========================== RENDER =============================== */
+/* =========================== RENDER =============================== *
+ * Blocky 3D. Everything solid is an axis-aligned box, pushed through one
+ * perspective camera that flies just behind the ball, then painted back
+ * to front (painter's algorithm). The corridor is a Minecraft bridge
+ * floating in the sky: there is no ground under it anywhere — only haze,
+ * clouds and drifting islands far below.
+ * ------------------------------------------------------------------ */
 
-let camX = 0, camY = 0;           // top-left of the view, in world coords
-const sx = x => x - camX;
-const sy = y => y - camY;
-/* Where a world point lands on the canvas, in CSS pixels (render() rounds
- * the camera at the start of every frame). Handy for tests and tinkering. */
-function screenOf(x, y) { return { x: sx(x), y: sy(y) }; }
+const PATH_TOP = 26;             // how thick the bridge slab is (the ball rolls on top)
+const CAM_UP = 180;              // camera height above the path surface
+const LOOK_AHEAD = 145;          // camera aims this far in front of the ball
+const FOC_MUL = 0.86;            // focal length = this * window height
+const NEAR = 26;                 // near clipping distance
+const FOG_START = 300, FOG_END = 1150, FOG_CULL = 1140;
+const BX = 26, BROW = 26;        // bridge block width / row spacing
+const WALL_H = 44;               // corridor wall height
+const CAM_LAG = 46;              // how far the camera may trail the ball sideways
 
-const GROUND_BLOCK = 32;
-const DECO_CELL = 220;
+const cam = { x: 0, y: 0, z: 0, pitch: 0.4, cp: 1, sp: 0, foc: 600, hz: 0, shx: 0, shy: 0 };
 
-/* Full-screen blocky ground — the "Minecraft" backdrop. Blocks are
- * shaded from a deterministic hash of their world position, so the
- * grass looks hand-placed but never shimmers between frames. */
-function drawGround(th) {
-  const g = th.ground;
-  const x0 = Math.floor(camX / GROUND_BLOCK) * GROUND_BLOCK;
-  const y0 = Math.floor(camY / GROUND_BLOCK) * GROUND_BLOCK;
-  const xe = camX + W + GROUND_BLOCK, ye = camY + H + GROUND_BLOCK;
-  for (let gx = x0; gx < xe; gx += GROUND_BLOCK) {
-    for (let gy = y0; gy < ye; gy += GROUND_BLOCK) {
-      const h = hash2(gx * 0.013, gy * 0.013);
-      ctx.fillStyle = g[(h * g.length) | 0];
-      ctx.fillRect(sx(gx), sy(gy), GROUND_BLOCK + 1, GROUND_BLOCK + 1);
-      const h2 = hash2(gx * 0.031 + 5.5, gy * 0.031 + 9.1);
-      if (h2 > 0.86) {                       // sparse pixel detail
-        ctx.fillStyle = 'rgba(0,0,0,.10)';
-        ctx.fillRect(sx(gx) + 6, sy(gy) + 8, 9, 9);
-      } else if (h2 < 0.07) {
-        ctx.fillStyle = 'rgba(255,255,255,.09)';
-        ctx.fillRect(sx(gx) + 14, sy(gy) + 5, 7, 7);
-      }
+function aimCamera() {
+  cam.z = PATH_TOP + CAM_UP;
+  cam.y = game.camY;
+  cam.x = game.x + clamp(game.camX - game.x, -CAM_LAG, CAM_LAG);
+  const dy = (game.y + LOOK_AHEAD) - cam.y;
+  cam.pitch = clamp(Math.atan2(CAM_UP, Math.max(70, dy)), 0.15, 1.1);
+  cam.cp = Math.cos(cam.pitch);
+  cam.sp = Math.sin(cam.pitch);
+  cam.foc = H * FOC_MUL;
+  cam.hz = H * 0.5 - cam.foc * Math.tan(cam.pitch);    // screen y of the horizon
+  cam.shx = 0; cam.shy = 0;
+}
+
+/* World point -> screen x/y (written into out), returns its depth, or -1
+ * when it is behind the camera. */
+function project(wx, wy, wz, out) {
+  const dx = wx - cam.x, dy = wy - cam.y, dz = wz - cam.z;
+  const dep = dy * cam.cp - dz * cam.sp;
+  if (dep < NEAR) return -1;
+  const s = cam.foc / dep;
+  out[0] = W * 0.5 + cam.shx + dx * s;
+  out[1] = H * 0.5 + cam.shy - (dy * cam.sp + dz * cam.cp) * s;
+  return dep;
+}
+function screenOf(x, y, z) {
+  const o = [0, 0], d = project(x, y, z || 0, o);
+  return d > 0 ? { x: o[0], y: o[1], d: d } : null;
+}
+
+/* --------------------------- COLOUR ------------------------------- */
+const rgbCache = new Map();
+function rgbOf(hex) {
+  let v = rgbCache.get(hex);
+  if (!v) {
+    let s = String(hex).replace('#', '');
+    if (s.length === 3) s = s[0] + s[0] + s[1] + s[1] + s[2] + s[2];
+    const n = parseInt(s, 16);
+    v = [(n >> 16) & 255, (n >> 8) & 255, n & 255];
+    rgbCache.set(hex, v);
+  }
+  return v;
+}
+const shade = (c, k) => [clamp(c[0] * k, 0, 255), clamp(c[1] * k, 0, 255), clamp(c[2] * k, 0, 255)];
+const mixRGB = (a, b, t) => [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t, a[2] + (b[2] - a[2]) * t];
+const css = c => 'rgb(' + (c[0] | 0) + ',' + (c[1] | 0) + ',' + (c[2] | 0) + ')';
+
+const PAL = {
+  path: [], edge: [], rock: [], grass: [], cloud: [], ball: [],
+  haze: [0, 0, 0], skyTop: [0, 0, 0], skyBot: [0, 0, 0],
+  skyBelow: '#000', star: false, key: '',
+};
+function buildPalette(th) {
+  PAL.path = th.path.map(rgbOf);
+  PAL.edge = th.edge.map(rgbOf);
+  PAL.rock = th.ground.map(c => shade(rgbOf(c), 0.42));
+  PAL.grass = th.ground.map(rgbOf);
+  PAL.haze = rgbOf(th.sky[1]);
+  PAL.skyTop = rgbOf(th.sky[0]);
+  PAL.skyBot = rgbOf(th.sky[1]);
+  PAL.cloud = [
+    mixRGB([255, 255, 255], PAL.haze, 0.16),
+    mixRGB([246, 248, 255], PAL.haze, 0.30),
+    mixRGB([255, 255, 255], PAL.haze, 0.42),
+  ];
+  PAL.ball = [rgbOf('#c6ff8a'), rgbOf('#7fd23f'), rgbOf('#41801f')];
+  PAL.skyBelow = css(mixRGB(PAL.skyBot, PAL.skyTop, 0.22));
+  PAL.deep = css(shade(PAL.skyBot, 0.72));
+  PAL.star = !!th.star;
+  PAL.key = th.sky[0] + th.sky[1];
+  colCache.clear();
+}
+
+const colCache = new Map();
+/* Fog: far blocks fade into the haze so the bridge dissolves into the sky. */
+function tone(c, dep) {
+  const t = (dep - FOG_START) / (FOG_END - FOG_START);
+  const b = t <= 0 ? 0 : (t >= 1 ? 8 : (t * 8) | 0);
+  const key = (((c[0] | 0) << 16) | ((c[1] | 0) << 8) | (c[2] | 0)) * 9 + b;
+  let s = colCache.get(key);
+  if (s === undefined) {
+    const k = b / 8, h = PAL.haze;
+    s = css([c[0] + (h[0] - c[0]) * k, c[1] + (h[1] - c[1]) * k, c[2] + (h[2] - c[2]) * k]);
+    colCache.set(key, s);
+  }
+  return s;
+}
+/* Rough view depth of a world point, for picking its fog tint. */
+function depthAt(x, y, z) {
+  return (y - cam.y) * cam.cp - (z - cam.z) * cam.sp;
+}
+
+/* --------------------------- FACES -------------------------------- */
+/* Face records are pooled and reused every frame: the renderer pushes a
+ * few hundred of them per frame and only the sort order changes. */
+const pool = [];
+let nF = 0;
+function newFace() {
+  let f = pool[nF];
+  if (!f) f = pool[nF] = { d: 0, kind: 0, c: '', a: '', p: [0, 0, 0, 0, 0, 0, 0, 0] };
+  nF++;
+  return f;
+}
+const _p = [0, 0];
+const offscreen = p => (p[0] < 0 && p[2] < 0 && p[4] < 0 && p[6] < 0) ||
+                       (p[0] > W && p[2] > W && p[4] > W && p[6] > W) ||
+                       (p[1] < 0 && p[3] < 0 && p[5] < 0 && p[7] < 0) ||
+                       (p[1] > H && p[3] > H && p[5] > H && p[7] > H);
+
+function quad(ax, ay, az, bx, by, bz, cx, cy, cz, dx, dy, dz, col) {
+  let d = project(ax, ay, az, _p); if (d < 0) return;
+  const f = newFace(), p = f.p;
+  p[0] = _p[0]; p[1] = _p[1];
+  if (project(bx, by, bz, _p) < 0) { nF--; return; }
+  p[2] = _p[0]; p[3] = _p[1];
+  if (project(cx, cy, cz, _p) < 0) { nF--; return; }
+  p[4] = _p[0]; p[5] = _p[1];
+  if (project(dx, dy, dz, _p) < 0) { nF--; return; }
+  p[6] = _p[0]; p[7] = _p[1];
+  if (offscreen(p)) { nF--; return; }
+  f.d = d; f.kind = 0; f.c = col;
+}
+
+/* One shaded cube: top, near face and whichever side face the camera can
+ * see. A null colour skips that face (interior blocks of the slab). */
+function box(cx, cy, cz, sx, sy, sz, top, side, front) {
+  const x0 = cx - sx * 0.5, x1 = cx + sx * 0.5;
+  const y0 = cy - sy * 0.5, y1 = cy + sy * 0.5;
+  const z0 = cz, z1 = cz + sz;
+  const t = top ? tone(top, depthAt(cx, cy, cz + sz)) : null;
+  const s = side ? tone(side, depthAt(cx, cy, cz)) : null;
+  const n = front ? tone(front, depthAt(cx, cy, cz)) : null;
+  if (t) quad(x0, y0, z1, x1, y0, z1, x1, y1, z1, x0, y1, z1, t);
+  if (n) quad(x0, y0, z0, x1, y0, z0, x1, y0, z1, x0, y0, z1, n);
+  if (s && cam.x < x0) quad(x0, y0, z0, x0, y1, z0, x0, y1, z1, x0, y0, z1, s);
+  else if (s && cam.x > x1) quad(x1, y0, z0, x1, y1, z0, x1, y1, z1, x1, y0, z1, s);
+}
+
+/* Flat shadow ellipse lying on the bridge (drawn just before the ball). */
+function spot(x, y, z, r, col) {
+  const d = project(x, y, z, _p); if (d < 0) return;
+  const f = newFace(), s = cam.foc / d;
+  f.d = d - 0.5; f.kind = 1; f.c = col;
+  f.p[0] = _p[0]; f.p[1] = _p[1]; f.p[2] = r * s; f.p[3] = r * s * 0.42;
+}
+
+function drawFaces() {
+  const order = pool.slice(0, nF);
+  order.sort((a, b) => b.d - a.d);
+  for (const f of order) {
+    const p = f.p;
+    if (f.kind === 1) {                       // flat shadow on the bridge
+      ctx.beginPath();
+      ctx.ellipse(p[0], p[1], Math.max(1, p[2]), Math.max(1, p[3]), 0, 0, TAU);
+      ctx.fillStyle = f.c;
+      ctx.fill();
+      continue;
     }
+    if (f.kind === 3) {                       // the ball
+      const d = project(p[0], p[1], p[2], _p);
+      if (d < 0) continue;
+      const r = Math.max(1.5, p[3] * cam.foc / d);
+      const g = ctx.createRadialGradient(_p[0] - r * 0.34, _p[1] - r * 0.34, r * 0.18, _p[0], _p[1], r * 1.05);
+      g.addColorStop(0, '#c6ff8a');
+      g.addColorStop(0.55, '#7fd23f');
+      g.addColorStop(1, '#3c7620');
+      ctx.beginPath();
+      ctx.arc(_p[0], _p[1], r, 0, TAU);
+      ctx.fillStyle = g;
+      ctx.fill();
+      ctx.strokeStyle = 'rgba(24,60,10,.7)';
+      ctx.lineWidth = Math.max(1, r * 0.09);
+      ctx.stroke();
+      // speckles that rotate as the ball rolls
+      const roll = +f.a;
+      for (let k = 0; k < 4; k++) {
+        const a = roll + k * 1.571, rr = r * (k % 2 ? 0.5 : 0.76), sz = Math.max(2, r * 0.22);
+        ctx.fillStyle = k % 2 ? 'rgba(255,255,255,.3)' : 'rgba(30,70,12,.32)';
+        ctx.fillRect(_p[0] + Math.cos(a) * rr - sz * 0.5, _p[1] + Math.sin(a) * rr * 0.9 - sz * 0.5, sz, sz);
+      }
+      continue;
+    }
+    if (f.kind === 4) {                       // portal glow
+      const d = project(p[0], p[1], p[2], _p);
+      if (d < 0) continue;
+      const r = Math.max(2, p[3] * cam.foc / d), pl = +f.a;
+      const g = ctx.createRadialGradient(_p[0], _p[1], 0, _p[0], _p[1], r);
+      g.addColorStop(0, 'rgba(232,196,255,' + (0.2 + 0.5 * pl) + ')');
+      g.addColorStop(0.45, 'rgba(160,90,246,' + (0.08 + 0.28 * pl) + ')');
+      g.addColorStop(1, 'rgba(120,60,220,0)');
+      ctx.fillStyle = g;
+      ctx.fillRect(_p[0] - r, _p[1] - r, r * 2, r * 2);
+      continue;
+    }
+    // Nudge every corner a hair away from the face centre: canvas antialiasing
+    // otherwise leaves hairline seams between blocks that share an edge.
+    const mx = (p[0] + p[2] + p[4] + p[6]) * 0.25, my = (p[1] + p[3] + p[5] + p[7]) * 0.25;
+    ctx.beginPath();
+    ctx.moveTo(p[0] + (p[0] - mx) * 0.012, p[1] + (p[1] - my) * 0.012);
+    ctx.lineTo(p[2] + (p[2] - mx) * 0.012, p[3] + (p[3] - my) * 0.012);
+    ctx.lineTo(p[4] + (p[4] - mx) * 0.012, p[5] + (p[5] - my) * 0.012);
+    ctx.lineTo(p[6] + (p[6] - mx) * 0.012, p[7] + (p[7] - my) * 0.012);
+    ctx.closePath();
+    ctx.fillStyle = f.c;
+    ctx.fill();
   }
 }
 
-function block(x, y, s, color, shade) {
-  ctx.fillStyle = color;
-  ctx.fillRect(x, y, s, s);
-  ctx.fillStyle = shade;
-  ctx.fillRect(x, y, s, Math.max(1, s * 0.18));
-  ctx.fillStyle = 'rgba(0,0,0,.22)';
-  ctx.fillRect(x, y + s - Math.max(1, s * 0.16), s, Math.max(1, s * 0.16));
-}
+/* ----------------------------- SKY -------------------------------- */
+function drawSky(th) {
+  const hz = clamp(cam.hz, 0, H);
+  let g = ctx.createLinearGradient(0, 0, 0, Math.max(2, hz));
+  g.addColorStop(0, th.sky[0]);
+  g.addColorStop(1, th.sky[1]);
+  ctx.fillStyle = g;
+  ctx.fillRect(0, 0, W, Math.max(0, hz));
 
-function clearOfPath(px, py, margin, L) {
-  const steps = 3;
-  for (let i = 0; i <= steps; i++) {
-    const yy = py - margin / 2 + (margin * i) / steps;
-    const hw = halfAt(yy, L) + margin;
-    if (Math.abs(px - cxAt(yy, L)) < hw) return false;
+  // Below the horizon there is no ground at all: the air just deepens.
+  g = ctx.createLinearGradient(0, hz, 0, H);
+  g.addColorStop(0, th.sky[1]);
+  g.addColorStop(0.42, PAL.skyBelow);
+  g.addColorStop(1, PAL.deep);
+  ctx.fillStyle = g;
+  ctx.fillRect(0, hz, W, H - hz);
+
+  const m = Math.min(W, H);
+  const sx0 = W * 0.74 + (cam.pitch - 0.4) * W * 0.35;
+  const sy0 = hz * 0.42;
+  if (PAL.star) {
+    ctx.fillStyle = 'rgba(255,255,255,.85)';
+    for (let i = 0; i < 90; i++) {
+      const h1 = hash2(i * 7.3, 1.1), h2 = hash2(i * 2.9, 5.4);
+      const yy = h1 * hz - (cam.y * 0.012 + cam.pitch * 40) % 2500;
+      const px = ((h2 * W) + i * 3.7) % W;
+      const py = ((yy % hz) + hz) % hz;
+      const s = h1 > 0.86 ? 2.4 : 1.5;
+      ctx.fillRect(px, py, s, s);
+    }
+    ctx.fillStyle = 'rgba(226,232,255,.92)';
+    ctx.fillRect(sx0 - m * 0.035, sy0 - m * 0.035, m * 0.07, m * 0.07);
+    ctx.fillStyle = 'rgba(200,210,240,.55)';
+    ctx.fillRect(sx0 - m * 0.015, sy0 - m * 0.028, m * 0.02, m * 0.02);
+  } else {
+    const r = m * 0.055;
+    const gg = ctx.createRadialGradient(sx0, sy0, r * 0.4, sx0, sy0, r * 5);
+    gg.addColorStop(0, 'rgba(255,246,190,.5)');
+    gg.addColorStop(1, 'rgba(255,246,190,0)');
+    ctx.fillStyle = gg;
+    ctx.fillRect(sx0 - r * 5, sy0 - r * 5, r * 10, r * 10);
+    ctx.fillStyle = 'rgba(255,244,170,.95)';
+    ctx.fillRect(sx0 - r, sy0 - r, r * 2, r * 2);
   }
-  return true;
 }
 
-/* Trees, flowers, ponds, boulders, torches and glowstone, laid out on a
- * sparse world grid so the field is lush but the path stays clear. */
-function drawDecor(th, L) {
-  const i0 = Math.floor((camX - DECO_CELL) / DECO_CELL);
-  const i1 = Math.floor((camX + W + DECO_CELL) / DECO_CELL);
-  const j0 = Math.floor((camY - DECO_CELL) / DECO_CELL);
-  const j1 = Math.floor((camY + H + DECO_CELL) / DECO_CELL);
-  const twinkle = 0.5 + 0.5 * Math.sin(game.time * 2.2);
-
-  for (let i = i0; i <= i1; i++) {
-    for (let j = j0; j <= j1; j++) {
-      const h = hash2(i * 1.7 + 0.3, j * 2.9 + 0.7);
-      const h3 = hash2(i * 4.1 + 1.9, j * 3.3 + 2.5);
-      if (h > 0.66) continue;
-      const px = i * DECO_CELL + h3 * 150 + 20;
-      const py = j * DECO_CELL + h * 320 + 20;
-      const pxx = sx(px), pyy = sy(py);
-      if (pxx < -260 || pxx > W + 260 || pyy < -320 || pyy > H + 320) continue;
-      const kind = hash2(i * 8.3 + 3.1, j * 6.7 + 4.4);
-
-      if (kind < 0.32) {                                  // tree
-        if (!clearOfPath(px, py, 150, L)) continue;
-        drawTree(th, pxx, pyy);
-      } else if (kind < 0.50) {                           // flowers
-        if (!clearOfPath(px, py, 46, L)) continue;
-        drawFlowers(th, pxx, pyy, i, j);
-      } else if (kind < 0.62) {                            // grass tuft
-        if (!clearOfPath(px, py, 30, L)) continue;
-        ctx.fillStyle = th.leaf[0];
-        for (let k = 0; k < 4; k++) {
-          const ox = (hash2(i + k, j) - 0.5) * 34;
-          const oy = (hash2(i, j + k) - 0.5) * 26;
-          ctx.fillRect(pxx + ox, pyy + oy, 6, 12);
-          ctx.fillStyle = k % 2 ? th.leaf[1] : th.leaf[0];
+/* ------------------- ISLANDS AND CLOUDS BELOW --------------------- *
+ * Deterministic decoration on a world grid: nothing is stored, the same
+ * cell always grows the same island, and only cells inside the fog are
+ * ever pushed at the renderer. */
+const DECO_CX = 300, DECO_CY = 250;
+function drawDecor() {
+  const gy1 = Math.ceil((cam.y + FOG_CULL) / DECO_CY) * DECO_CY;
+  const gx0 = Math.floor((cam.x - 1100) / DECO_CX), gx1 = Math.floor((cam.x + 1100) / DECO_CX);
+  for (let gy = Math.floor(cam.y / DECO_CY) * DECO_CY; gy <= gy1; gy += DECO_CY) {
+    for (let gx = gx0; gx <= gx1; gx++) {
+      const h = hash2(gx * 1.37 + 3.1, gy * 2.11 + 7.7);
+      if (h < 0.46) continue;
+      const cloud = h > 0.74;
+      const px = gx * DECO_CX + (hash2(gx * 3.3, gy * 1.9) - 0.5) * 190;
+      const py = gy + (hash2(gx * 5.7, gy * 4.3) - 0.5) * 170;
+      const pz = cloud ? -150 - hash2(gx * 7.1, gy * 2.3) * 300
+                       : -70 - hash2(gx * 9.3, gy * 6.1) * 240;
+      if (depthAt(px, py, pz) > FOG_CULL) continue;
+      const bob = Math.sin(game.time * 0.45 + h * 12) * 7;
+      const n = 3 + (((h * 10) | 0) % 4);
+      for (let k = 0; k < n; k++) {
+        const r = hash2(gx + k * 2.7, gy + k * 1.3);
+        const s = 28 + r * 24;
+        const ox = (k - n * 0.5) * s * 0.78 + (r - 0.5) * 22;
+        const oy = (hash2(gx - k, gy + k) - 0.5) * s;
+        const oz = bob + cloud * (hash2(k * 4.1, gx + gy) - 0.35) * 30;
+        if (cloud) {
+          const c0 = PAL.cloud[(k + ((h * 4) | 0)) % 3];
+          box(px + ox, py + oy, pz + oz, s, s, s * 0.6, c0, shade(c0, 0.9), shade(c0, 0.82));
+        } else {
+          const g0 = PAL.grass[(k + ((h * 6) | 0)) % PAL.grass.length];
+          const r0 = PAL.rock[(k + ((h * 5) | 0)) % PAL.rock.length];
+          box(px + ox, py + oy, pz + oz, s, s, s * 0.9, g0, shade(r0, 0.85), r0);
         }
-      } else if (kind < 0.72) {                            // pond
-        if (!clearOfPath(px, py, 90, L)) continue;
-        drawPond(th, pxx, pyy);
-      } else if (kind < 0.82) {                            // boulder
-        if (!clearOfPath(px, py, 70, L)) continue;
-        drawBoulder(th, pxx, pyy, i, j);
-      } else if (kind < 0.92) {                            // torch
-        if (!clearOfPath(px, py, 50, L)) continue;
-        drawTorch(th, pxx, pyy, twinkle);
-      } else if (th.star) {                                // glowstone
-        if (!clearOfPath(px, py, 44, L)) continue;
-        const a = 0.25 + 0.35 * twinkle;
-        const gr = ctx.createRadialGradient(pxx, pyy, 0, pxx, pyy, 46);
-        gr.addColorStop(0, 'rgba(255,240,170,' + a + ')');
-        gr.addColorStop(1, 'rgba(255,240,170,0)');
-        ctx.fillStyle = gr;
-        ctx.fillRect(pxx - 46, pyy - 46, 92, 92);
-        block(pxx - 9, pyy - 9, 18, '#ffe9a0', '#fff6d0');
       }
     }
   }
 }
 
-function drawTree(th, x, y) {
-  ctx.fillStyle = 'rgba(0,0,0,.28)';                 // flat-top-down shadow
-  ctx.fillRect(x - 34 + 7, y - 34 + 9, 68, 68);
-  const bs = 22;
-  for (let a = 0; a < 3; a++) {
-    for (let b = 0; b < 3; b++) {
-      if (a === 1 && b === 1) continue;
-      if ((a + b) % 2 === 1 && hash2(a + x, b + y) > 0.86) continue;
-      const lv = th.leaf[(hash2(a * 3 + x * 0.01, b * 5 + y * 0.01) * 3) | 0];
-      block(x - 33 + a * bs, y - 33 + b * bs, bs, lv, 'rgba(255,255,255,.13)');
+/* ---------------------------- BRIDGE ------------------------------ */
+function drawBridge(th, L) {
+  const first = Math.floor(cam.y / BROW);
+  const last = Math.ceil((cam.y + FOG_CULL) / BROW);
+  for (let r = first; r <= last; r++) {
+    const y = r * BROW;
+    if (y < -BROW) continue;
+    const c = cxAt(y, L), hw = halfAt(y, L);
+    const half = Math.ceil(hw / BX);
+    const fogT = (depthAt(c, y, 0) - FOG_START) / (FOG_END - FOG_START);
+    if (fogT >= 0.995) continue;
+
+    for (let i = -half; i <= half; i++) {
+      const bx = c + i * BX;
+      const h = hash2(bx * 0.31 + 0.5, y * 0.27 + 1.7);
+      const col = PAL.path[(h * PAL.path.length) | 0];
+      box(bx, y, 0, BX, BROW, PATH_TOP, col, null, null);
+    }
+
+    // The parapet sits flush with the outer deck block, so the bridge has no
+    // visible seam and no hole where deck meets wall.
+    const edge = half * BX + BX * 0.5;
+    const wh = WALL_H * (0.7 + hash2(r * 1.7, 3.3) * 0.6);
+    const eT = PAL.edge[(hash2(r * 2.3, 8.1) * PAL.edge.length) | 0];
+    const eS = PAL.edge[(hash2(r * 3.1, 4.4) * PAL.edge.length) | 0];
+    for (const sideSign of [-1, 1]) {
+      const wx = c + sideSign * (edge + BX * 0.5);
+      box(wx, y, PATH_TOP, BX, BROW, wh, eT, eS, shade(eS, 0.82));
     }
   }
-  block(x - 11, y - 11, 22, th.trunk, 'rgba(255,255,255,.16)');
 }
 
-function drawFlowers(th, x, y, i, j) {
-  for (let k = 0; k < 5; k++) {
-    const ox = Math.round((hash2(i * 2 + k, j * 3) - 0.5) * 54);
-    const oy = Math.round((hash2(i * 5, j * 7 + k) - 0.5) * 44);
-    ctx.fillStyle = '#3f8f2e';
-    ctx.fillRect(x + ox + 2, y + oy + 5, 3, 7);
-    ctx.fillStyle = th.flower[k % th.flower.length];
-    ctx.fillRect(x + ox, y + oy, 7, 7);
-    ctx.fillStyle = 'rgba(255,255,255,.5)';
-    ctx.fillRect(x + ox + 2, y + oy + 2, 3, 3);
-  }
-}
-
-function drawPond(th, x, y) {
-  for (let a = -1; a <= 1; a++) {
-    for (let b = -1; b <= 1; b++) {
-      if (Math.abs(a) + Math.abs(b) === 2) continue;
-      block(x - 24 + a * 24, y - 24 + b * 24, 24, th.water[(a + b + 2) % 2], 'rgba(255,255,255,.18)');
-    }
-  }
-  ctx.fillStyle = 'rgba(255,255,255,.22)';
-  ctx.fillRect(x - 16, y - 16, 12, 5);
-}
-
-function drawBoulder(th, x, y, i, j) {
-  ctx.fillStyle = 'rgba(0,0,0,.25)';
-  ctx.fillRect(x - 26, y - 20, 56, 46);
-  for (let k = 0; k < 3; k++) {
-    const ox = Math.round((hash2(i + k, j) - 0.5) * 40);
-    const oy = Math.round((hash2(i, j + k) - 0.5) * 34);
-    const s = 20 + ((hash2(k + i, j) * 14) | 0);
-    block(x + ox, y + oy, s, th.edge[(hash2(k, i + j) * 4) | 0], 'rgba(255,255,255,.14)');
+/* ------------------ SLIDING BLOCKS AND THE PORTAL ----------------- */
+function drawObstacles() {
+  for (const o of game.obstacles) {
+    const x = obstacleX(o), y = o.y;
+    if (depthAt(x, y, 0) > FOG_CULL || depthAt(x, y, 0) < -140) continue;
+    const base = rgbOf(o.kind === 0 ? '#5a5a66' : o.kind === 1 ? '#6b5a4a' : '#4a5a66');
+    const lift = PATH_TOP + Math.sin(game.time * 2.4 + o.phase) * 1.5;
+    spot(x, y, PATH_TOP + 1, o.w * 0.62, 'rgba(0,0,0,.22)');
+    box(x, y, lift, o.w, 34, 30, shade(base, 1.2), base, shade(base, 0.78));
+    box(x, y, lift + 30, o.w * 0.9, 12, 5, rgbOf('#ffdc5a'), rgbOf('#c9a72f'), null);
   }
 }
 
-function drawTorch(th, x, y, twinkle) {
-  const a = 0.2 + 0.3 * twinkle;
-  const gr = ctx.createRadialGradient(x + 3, y + 3, 0, x + 3, y + 3, 70);
-  gr.addColorStop(0, 'rgba(255,190,90,' + a + ')');
-  gr.addColorStop(1, 'rgba(255,190,90,0)');
-  ctx.fillStyle = gr;
-  ctx.fillRect(x - 70, y - 70, 148, 148);
-  ctx.fillStyle = th.trunk;
-  ctx.fillRect(x, y, 7, 22);
-  ctx.fillStyle = '#ffcf5a';
-  ctx.fillRect(x - 2, y - 6, 11, 9);
-  ctx.fillStyle = '#fff2b0';
-  ctx.fillRect(x + 1, y - 4, 5, 5);
-}
-
-/* The wiggly path: a stone-edged trail of blocky gravel. */
-function drawPath(th, L, clipTop, clipBottom) {
-  const step = 9;
-  const path = new Path2D();
-  let started = false;
-  for (let y = clipTop; y <= clipBottom; y += step) {
-    const c = sx(cxAt(y, L)), hw = halfAt(y, L), yy = sy(y);
-    if (!started) { path.moveTo(c - hw, yy); started = true; }
-    else path.lineTo(c - hw, yy);
-  }
-  for (let y = clipBottom; y >= clipTop; y -= step) {
-    path.lineTo(sx(cxAt(y, L)) + halfAt(y, L), sy(y));
-  }
-  path.closePath();
-
-  ctx.save();
-  ctx.clip(path);
-  ctx.fillStyle = th.path[0];
-  ctx.fillRect(0, 0, W, H);
-  const bstep = 18;
-  const y0 = Math.floor(clipTop / bstep) * bstep;
-  for (let y = y0; y < clipBottom; y += bstep) {
-    const c = cxAt(y, L), hw = halfAt(y, L), yy = sy(y);
-    for (let x = c - hw - bstep; x < c + hw + bstep; x += bstep) {
-      const h = hash2(x * 0.021, y * 0.021);
-      ctx.fillStyle = th.path[(h * th.path.length) | 0];
-      ctx.fillRect(sx(x), yy, bstep + 1, bstep + 1);
-      if (h > 0.93) {
-        ctx.fillStyle = 'rgba(0,0,0,.13)';
-        ctx.fillRect(sx(x) + 5, yy + 4, 7, 7);
-      }
-    }
-  }
-  ctx.restore();
-
-  // Stone border blocks + soft inner shadow so the corridor reads as walls.
-  const es = 15;
-  for (let y = Math.floor(clipTop / 12) * 12; y <= clipBottom; y += 12) {
-    const c = cxAt(y, L), hw = halfAt(y, L), yy = sy(y);
-    const hsh = hash2(y * 0.05, 1.7), hsh2 = hash2(y * 0.05, 9.4);
-    block(sx(c - hw) - es * 0.5, yy - 2, es, th.edge[(hsh * 4) | 0], 'rgba(255,255,255,.12)');
-    block(sx(c + hw) - es * 0.5, yy - 2, es, th.edge[(hsh2 * 4) | 0], 'rgba(255,255,255,.12)');
-    ctx.fillStyle = 'rgba(0,0,0,.20)';
-    ctx.fillRect(sx(c - hw) + es * 0.5, yy - 2, 6, 16);
-    ctx.fillRect(sx(c + hw) - es * 0.5 - 6, yy - 2, 6, 16);
-  }
-}
-
-/* Finish line: a nether-portal style gate you get teleported by. */
 function drawGate(th, L, portalT) {
-  const gy = L.len, gx = sx(cxAt(gy, L)), yy = sy(gy);
-  if (yy < -260 || yy > H + 300) return;
-  const hw = Math.min(halfAt(gy, L) - 4, 74);
-  const h = 96;
-
+  const gy = L.len, gx = cxAt(gy, L);
+  const d = depthAt(gx, gy, PATH_TOP);
+  if (d > FOG_CULL + 120 || d < -220) return;
+  const hw = Math.min(halfAt(gy, L) - 2, 74), h = 96;
+  const fr = rgbOf('#241436'), fr2 = rgbOf('#1b0f2b');
   const pulse = 0.55 + 0.45 * Math.sin(game.time * 3);
-  const gr = ctx.createRadialGradient(gx, yy - h / 2, 8, gx, yy - h / 2, 190);
-  gr.addColorStop(0, 'rgba(186,104,255,' + (0.42 + 0.24 * pulse) + ')');
-  gr.addColorStop(1, 'rgba(186,104,255,0)');
-  ctx.fillStyle = gr;
-  ctx.fillRect(gx - 210, yy - h / 2 - 210, 420, 420);
 
-  // obsidian frame
+  quad(gx - hw, gy, PATH_TOP + 6, gx - hw, gy, PATH_TOP + 6 + h,
+       gx + hw, gy, PATH_TOP + 6 + h, gx + hw, gy, PATH_TOP + 6, 'rgba(58,22,104,.95)');
+  spot(gx, gy, PATH_TOP + 6 + h * 0.5, hw * 1.05, 'rgba(186,104,255,' + (0.2 + 0.18 * pulse) + ')');
+  const f = newFace();
+  f.d = d - 0.4; f.kind = 4; f.c = '';
+  f.p[0] = gx; f.p[1] = gy; f.p[2] = PATH_TOP + 6 + h * 0.5; f.p[3] = hw * 0.55;
+  f.a = String(pulse);
+
+  // obsidian frame: two pillars and a lintel
   const fs = 18;
+  for (let z = 0; z < h + fs; z += fs) {
+    box(gx - hw - fs * 0.5, gy, PATH_TOP + z, fs, fs, fs, fr, fr2, fr2);
+    box(gx + hw + fs * 0.5, gy, PATH_TOP + z, fs, fs, fs, fr, fr2, fr2);
+  }
   for (let x = -hw - fs; x <= hw; x += fs) {
-    block(gx + x, yy - h - fs, fs, '#241436', 'rgba(255,255,255,.10)');
-    block(gx + x, yy, fs, '#241436', 'rgba(255,255,255,.10)');
+    box(gx + x, gy, PATH_TOP + h, fs, fs, fs, fr, fr2, fr2);
   }
-  for (let y = -h; y < 0; y += fs) {
-    block(gx - hw - fs, yy + y, fs, '#1b0f2b', 'rgba(255,255,255,.10)');
-    block(gx + hw, yy + y, fs, '#1b0f2b', 'rgba(255,255,255,.10)');
-  }
-
-  // swirling inner portal
-  ctx.save();
-  ctx.beginPath();
-  ctx.rect(gx - hw, yy - h, hw * 2 + 1, h + 1);
-  ctx.clip();
-  ctx.fillStyle = '#12071f';
-  ctx.fillRect(gx - hw, yy - h, hw * 2 + 1, h + 1);
-  for (let k = 0; k < 14; k++) {
-    const t = game.time * 1.6 + k * 0.75;
-    const px = gx + Math.sin(t) * hw * 0.72;
-    const py = yy - h / 2 + Math.cos(t * 1.3 + k) * h * 0.42;
-    const rad = 12 + 7 * Math.sin(t * 2 + k);
-    const cg = ctx.createRadialGradient(px, py, 0, px, py, rad);
-    cg.addColorStop(0, 'rgba(226,180,255,.85)');
-    cg.addColorStop(0.5, 'rgba(150,80,240,.45)');
-    cg.addColorStop(1, 'rgba(120,60,220,0)');
-    ctx.fillStyle = cg;
-    ctx.fillRect(px - rad, py - rad, rad * 2, rad * 2);
-  }
-  ctx.restore();
-
   if (game.state === 'teleport') {
     for (let k = 0; k < 3; k++) {
-      const p = ((portalT * 1.3 + k / 3) % 1);
-      ctx.strokeStyle = 'rgba(226,190,255,' + (1 - p) * 0.8 + ')';
-      ctx.lineWidth = 6;
-      ctx.beginPath();
-      ctx.ellipse(gx, yy - h / 2, 20 + p * 220, (20 + p * 220) * 0.6, 0, 0, TAU);
-      ctx.stroke();
+      const t = (portalT * 1.3 + k / 3) % 1;
+      spot(gx, gy, PATH_TOP + 6 + h * 0.5, 20 + t * 260, 'rgba(226,190,255,' + (1 - t) * 0.5 + ')');
     }
   }
 }
 
-function drawObstacles(th) {
-  for (const o of game.obstacles) {
-    const x = obstacleX(o), yy = sy(o.y);
-    if (yy < -80 || yy > H + 80) continue;
-    const px = sx(x), py = yy + Math.sin(game.time * 2.4 + o.phase) * 2;
-    ctx.fillStyle = 'rgba(0,0,0,.3)';
-    ctx.fillRect(px - o.w / 2 + 6, py - o.h / 2 + 8, o.w, o.h);
-    const base = o.kind === 0 ? '#5a5a66' : o.kind === 1 ? '#6b5a4a' : '#4a5a66';
-    for (let bx = -o.w / 2; bx < o.w / 2 - 1; bx += o.h) {
-      const h = hash2(o.y * 0.1 + bx, o.phase);
-      block(px + bx, py - o.h / 2, Math.min(o.h, o.w / 2 - bx), base, 'rgba(255,255,255,.16)');
-      ctx.fillStyle = 'rgba(0,0,0,.18)';
-      ctx.fillRect(px + bx + 6, py - o.h / 2 + 6, Math.max(3, o.h - 12), Math.max(3, o.h - 12) * 0.5);
-      if (h > 0.6) { ctx.fillStyle = 'rgba(255,255,255,.1)'; ctx.fillRect(px + bx + 4, py - 4, 8, 6); }
-    }
-    // Warning bolts on the sides so you see which way it slides.
-    ctx.fillStyle = 'rgba(255,220,90,.9)';
-    ctx.fillRect(px - o.w / 2, py - o.h / 2 - 4, o.w, 4);
-  }
-}
-
+/* ----------------------------- BALL ------------------------------- */
 function drawBall(th) {
-  const px = sx(game.x), py = sy(game.y);
-  const roll = game.y / BALL_R;
-  const squash = 1 + Math.min(0.12, Math.abs(game.vx) / 4000);
-  const shrunk = BALL_R * ballScale;
-
-  ctx.fillStyle = 'rgba(0,0,0,.34)';
-  ctx.beginPath();
-  ctx.ellipse(px + 4, py + 6, shrunk * 1.05, shrunk * 0.78, 0, 0, TAU);
-  ctx.fill();
-
-  ctx.save();
-  ctx.translate(px, py);
-  ctx.scale(ballScale * squash, ballScale / squash);
-  const g = ctx.createRadialGradient(-BALL_R * 0.35, -BALL_R * 0.35, BALL_R * 0.2, 0, 0, BALL_R);
-  g.addColorStop(0, '#c6ff8a');
-  g.addColorStop(0.55, '#7fd23f');
-  g.addColorStop(1, '#41801f');
-  ctx.fillStyle = g;
-  ctx.beginPath();
-  ctx.arc(0, 0, BALL_R, 0, TAU);
-  ctx.fill();
-  ctx.strokeStyle = 'rgba(24,60,10,.75)';
-  ctx.lineWidth = 3;
-  ctx.stroke();
-
-  // pixel speckles that rotate as the ball rolls
-  for (let k = 0; k < 5; k++) {
-    const a = roll + k * 1.256;
-    const rr = BALL_R * (k % 2 ? 0.52 : 0.82);
-    ctx.fillStyle = k % 2 ? 'rgba(255,255,255,.30)' : 'rgba(30,70,12,.35)';
-    ctx.fillRect(Math.cos(a) * rr - 2, Math.sin(a) * rr - 2, 5, 5);
-  }
-  ctx.restore();
-
-  // face (always upright, so it stays readable while rolling)
-  ctx.fillStyle = '#1d2a12';
-  const eyeY = py - 3;
-  ctx.fillRect(px - 7, eyeY - 3, 4, 5);
-  ctx.fillRect(px + 3, eyeY - 3, 4, 5);
-  ctx.fillStyle = '#fff';
-  ctx.fillRect(px - 6, eyeY - 2, 2, 2);
-  ctx.fillRect(px + 4, eyeY - 2, 2, 2);
-  ctx.fillStyle = '#1d2a12';
-  ctx.fillRect(px - 4, py + 5, 8, 3);
+  const r = BALL_R * ballScale;
+  const z = PATH_TOP + r;
+  const d = depthAt(game.x, game.y, z);
+  spot(game.x + r * 0.25, game.y + r * 0.3, PATH_TOP + 1.5, r * 1.02, 'rgba(0,0,0,.32)');
+  if (d > FOG_CULL) return;
+  const f = newFace();
+  f.d = d; f.kind = 3;
+  f.p[0] = game.x; f.p[1] = game.y; f.p[2] = z; f.p[3] = r;
+  f.a = String(game.y / BALL_R);
 }
 
+/* --------------------------- VIGNETTE ----------------------------- */
 function drawVignette(th) {
   const g = ctx.createRadialGradient(W / 2, H * 0.42, Math.min(W, H) * 0.28, W / 2, H * 0.5, Math.max(W, H) * 0.78);
   g.addColorStop(0, 'rgba(0,0,0,0)');
@@ -682,21 +733,21 @@ function drawVignette(th) {
 
 function render(portalT) {
   const L = level(), th = THEMES[L.theme];
-  const shakeX = game.shake ? (Math.random() - 0.5) * game.shake : 0;
-  const shakeY = game.shake ? (Math.random() - 0.5) * game.shake : 0;
-  camX = game.camX - W / 2 + shakeX;
-  camY = game.camY - shakeY;
-
+  if (PAL.key !== th.sky[0] + th.sky[1]) buildPalette(th);
+  nF = 0;
+  aimCamera();
+  if (game.shake) {
+    cam.shx = (Math.random() - 0.5) * game.shake;
+    cam.shy = (Math.random() - 0.5) * game.shake;
+  }
   ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
-  ctx.fillStyle = th.sky[1];
-  ctx.fillRect(0, 0, W, H);
-
-  drawGround(th);
-  drawDecor(th, L);
-  drawPath(th, L, camY - 60, camY + H + 60);
+  drawSky(th);
+  drawDecor();
+  drawBridge(th, L);
+  drawObstacles();
   drawGate(th, L, portalT);
-  drawObstacles(th);
   drawBall(th);
+  drawFaces();
   drawVignette(th);
 }
 
@@ -942,7 +993,7 @@ game.camY = game.y - H * 0.34;
 requestAnimationFrame(frame);
 
 /* Exposed for tests / tinkering from the console. */
-window.BLOCKYROLL = { game, LEVELS, level, cxAt, screenOf, halfAt, obstacleX, blockRooms, buildObstacles, GAP, BALL_R, startLevel, restartGame, update, render, keys, THEMES, get ballScale() { return ballScale; } };
+window.BLOCKYROLL = { game, LEVELS, level, cxAt, screenOf, project, cam, PATH_TOP, PAL, halfAt, obstacleX, blockRooms, buildObstacles, GAP, BALL_R, startLevel, restartGame, update, render, keys, THEMES, get ballScale() { return ballScale; } };
 
 
 
