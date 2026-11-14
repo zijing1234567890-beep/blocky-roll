@@ -47,9 +47,32 @@
     background: rgba(12,14,20,.7); padding: 9px 14px; border-radius: 3px;
     border: 2px solid rgba(0,0,0,.55); text-shadow: 2px 2px 0 rgba(0,0,0,.6);
     pointer-events: none; z-index: 5; text-align: center; line-height: 1.7;
-    transition: opacity .5s ease; white-space: nowrap;
+    transition: opacity .5s ease; max-width: min(94vw, 1040px);
   }
   #hint.dim { opacity: .28; }
+
+  /* on-screen roll buttons, for anyone who would rather press than scroll */
+  #pad {
+    position: fixed; left: 0; right: 0; bottom: 14px; padding: 0 14px;
+    display: flex; justify-content: space-between; align-items: flex-end;
+    pointer-events: none; z-index: 6;
+  }
+  .pbtn {
+    pointer-events: auto; cursor: pointer; user-select: none; touch-action: none;
+    min-width: 108px; min-height: 68px; padding: 8px 16px; border: 2px solid rgba(0,0,0,.6);
+    border-radius: 3px; background: rgba(12,14,20,.82); color: #f4f4e8;
+    font-family: inherit; font-size: 12px; font-weight: 700; letter-spacing: 1.6px;
+    text-transform: uppercase; text-shadow: 2px 2px 0 rgba(0,0,0,.6);
+    box-shadow: inset 0 -3px 0 rgba(0,0,0,.35), inset 0 2px 0 rgba(255,255,255,.12);
+    display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 3px;
+  }
+  .pbtn i { font-style: normal; font-size: 21px; line-height: 1; color: #a6f56a; }
+  .pbtn.on { background: rgba(84,128,48,.92); transform: translateY(2px); }
+  .pbtn.on i { color: #ffe57a; }
+  @media (max-width: 760px) {
+    #hint { bottom: 96px; font-size: 10px; }
+    .pbtn { min-width: 92px; min-height: 60px; }
+  }
 
   #center {
     position: fixed; inset: 0; display: flex; flex-direction: column;
@@ -122,7 +145,12 @@
   <div id="barwrap"><div id="fill"></div></div>
 </div>
 
-<div id="hint">SCROLL DOWN to roll &nbsp;·&nbsp; <span style="color:#a6f56a">A / D</span> or <span style="color:#a6f56a">← →</span> to steer &nbsp;·&nbsp; push the plank over the broken span &nbsp;·&nbsp; roll into the foam wall and it collapses</div>
+<div id="hint">SCROLL or hold <span style="color:#a6f56a">▲ ROLL</span> to go forward and <span style="color:#a6f56a">▼ BACK</span> to go back &nbsp;·&nbsp; <span style="color:#a6f56a">A / D</span> or <span style="color:#a6f56a">← →</span> to steer &nbsp;·&nbsp; push the plank over the broken span &nbsp;·&nbsp; roll into the foam wall and it collapses</div>
+
+<div id="pad">
+  <button class="pbtn" id="btnBack" aria-label="roll back"><i>▼</i>BACK</button>
+  <button class="pbtn" id="btnFwd" aria-label="roll forward"><i>▲</i>ROLL</button>
+</div>
 
 <div id="flash"></div>
 <div id="toast"><div class="lt"></div><div class="ls"></div></div>
@@ -130,7 +158,7 @@
 <div id="center">
   <h1>BLOCKY<span>ROLL</span></h1>
   <p>Roll the slime ball along the floating<br>sky-bridge and through the nether portal at the end.<br>Every level is the same length — push the loose plank<br>down over the broken span and dodge what is left.<br>From level 4 a foam wall blocks the way: roll into it<br>and it bursts in one hit. Roll into the air and the level restarts.</p>
-  <p><b>SCROLL</b> to roll &nbsp; <span class="key">A</span><span class="key">D</span> / <span class="key">←</span><span class="key">→</span> to steer</p>
+  <p><b>SCROLL</b> or hold <b>▲ ROLL</b> to go forward, <b>▼ BACK</b> to go back<br><span class="key">A</span><span class="key">D</span> / <span class="key">←</span><span class="key">→</span> to steer</p>
   <button id="startbtn">START ROLLING</button>
 </div>
 
@@ -292,7 +320,8 @@ const game = {
 };
 
 const level = () => LEVELS[game.level];
-const keys = { left: false, right: false, up: false, down: false, hold: false };
+const keys = { left: false, right: false, up: false, down: false,
+               padFwd: false, padBack: false, hold: false };
 
 /* ------------------ BLOCKS, HOLES AND THE BROKEN SPAN ------------- *
  * Nothing on the bridge moves any more. Solid blocks sit against a wall
@@ -987,7 +1016,7 @@ function startLevel() {
   UI.lvlNum.textContent = String(game.level + 1);
   UI.lvlName.textContent = L.name;
   toast('LEVEL ' + (game.level + 1), L.name + '  ·  ' + (L.blocks + L.holes) +
-    ' OBSTACLES  ·  A BROKEN SPAN' + (lv.foam ? '  ·  A FOAM WALL TO SMASH' : ' TO PUSH DOWN'));
+    ' OBSTACLES  ·  A BROKEN SPAN' + (lv.foam ? '  ·  A FOAM WALL IN THE WAY' : ' TO PUSH DOWN'));
 }
 
 /* Rolled into the foam wall hard enough: it bursts into cubes that tumble
@@ -1101,10 +1130,10 @@ function update(dt) {
   }
   if (game.state !== 'play') { game.camX = lerp(game.camX, game.x, 1 - Math.exp(-dt * 4)); return; }
 
-  // ---- scrolling drives the ball down the path ----
+  // ---- scrolling, or the on-screen buttons, drive the ball along ----
   let sc = 0;
-  if (keys.down) sc += 1;
-  if (keys.up) sc -= 1;
+  if (keys.down || keys.padFwd) sc += 1;
+  if (keys.up || keys.padBack) sc -= 1;
   if (sc) game.scroll = clamp(game.scroll + sc * 460 * dt, 0, L.len + 40);
   game.scroll = clamp(game.scroll, 0, L.len + 40);
   game.y = clamp(lerp(game.y, game.scroll, Math.min(1, dt * 15)), 0, L.len + 40);
@@ -1284,6 +1313,26 @@ cvs.addEventListener('pointermove', e => {
 cvs.addEventListener('pointerup', e => { if (drag && e.pointerId === drag.id) drag = null; });
 cvs.addEventListener('pointercancel', () => { drag = null; });
 document.getElementById('startbtn').addEventListener('click', e => { e.stopPropagation(); restartGame(); });
+
+/* The two roll buttons: hold one down and the ball rolls that way for as
+ * long as you hold it. A press from the menu starts the game. */
+function holdButton(el, name) {
+  const down = e => {
+    e.preventDefault();
+    if (game.state === 'menu' || game.state === 'win') restartGame();
+    keys[name] = true; el.classList.add('on');
+    UI.hint.classList.add('dim');
+  };
+  const up = () => { keys[name] = false; el.classList.remove('on'); };
+  window.addEventListener('blur', up);
+  el.addEventListener('pointerdown', e => { down(e); try { el.setPointerCapture(e.pointerId); } catch (err) {} });
+  el.addEventListener('pointerup', up);
+  el.addEventListener('pointercancel', up);
+  el.addEventListener('lostpointercapture', up);
+  el.addEventListener('contextmenu', e => e.preventDefault());
+}
+holdButton(document.getElementById('btnFwd'), 'padFwd');
+holdButton(document.getElementById('btnBack'), 'padBack');
 
 /* ============================== LOOP ============================== */
 let last = 0;
