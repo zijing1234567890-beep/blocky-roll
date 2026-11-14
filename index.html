@@ -122,14 +122,14 @@
   <div id="barwrap"><div id="fill"></div></div>
 </div>
 
-<div id="hint">SCROLL DOWN to roll &nbsp;·&nbsp; <span style="color:#a6f56a">A / D</span> or <span style="color:#a6f56a">← →</span> to steer &nbsp;·&nbsp; push the plank over the broken span &nbsp;·&nbsp; roll into the foam wall to smash it</div>
+<div id="hint">SCROLL DOWN to roll &nbsp;·&nbsp; <span style="color:#a6f56a">A / D</span> or <span style="color:#a6f56a">← →</span> to steer &nbsp;·&nbsp; push the plank over the broken span &nbsp;·&nbsp; roll into the foam wall and it collapses</div>
 
 <div id="flash"></div>
 <div id="toast"><div class="lt"></div><div class="ls"></div></div>
 
 <div id="center">
   <h1>BLOCKY<span>ROLL</span></h1>
-  <p>Roll the slime ball along the floating<br>sky-bridge and through the nether portal at the end.<br>Every level is the same length — push the loose plank<br>down over the broken span and dodge what is left.<br>From level 4 a foam wall blocks the way: roll into it<br>until it bursts. Roll into the air and the level restarts.</p>
+  <p>Roll the slime ball along the floating<br>sky-bridge and through the nether portal at the end.<br>Every level is the same length — push the loose plank<br>down over the broken span and dodge what is left.<br>From level 4 a foam wall blocks the way: roll into it<br>and it bursts in one hit. Roll into the air and the level restarts.</p>
   <p><b>SCROLL</b> to roll &nbsp; <span class="key">A</span><span class="key">D</span> / <span class="key">←</span><span class="key">→</span> to steer</p>
   <button id="startbtn">START ROLLING</button>
 </div>
@@ -249,8 +249,8 @@ const THEMES = {
  * blocks solid blocks on the deck you have to steer around
  * holes  holes in the deck: roll in and you drop into the air
  * gap    how long the broken span is — the plank you have to push across it
- * foam   how many shoves a foam wall across the bridge takes to smash
- *        (0 = no foam wall; from NIGHT CAVES on you have to break one)
+ * foam   1 = a foam wall across the bridge, which bursts the moment the
+ *        ball rolls into it (0 = no foam wall; NIGHT CAVES on has one)
  *
  * amp * freq * 1.463 is the path's steepest sideways slope (world x per
  * world y). It is tuned upward level by level but stays under the ball's
@@ -261,9 +261,9 @@ const LEVELS = [
   { name: 'MEADOW',       len: LEN, amp:  91, freq: 0.00337, half: 88, narrow: 0.00, theme: 'day',    blocks: 2, holes: 1, gap: 190, foam: 0 },
   { name: 'FOREST',       len: LEN, amp: 112, freq: 0.00365, half: 80, narrow: 0.04, theme: 'forest', blocks: 2, holes: 1, gap: 200, foam: 0 },
   { name: 'SUNSET RIDGE', len: LEN, amp: 139, freq: 0.00370, half: 72, narrow: 0.07, theme: 'sunset', blocks: 3, holes: 1, gap: 215, foam: 0 },
-  { name: 'NIGHT CAVES',  len: LEN, amp: 168, freq: 0.00350, half: 68, narrow: 0.08, theme: 'night',  blocks: 3, holes: 2, gap: 230, foam: 2 },
-  { name: 'THE NETHER',   len: LEN, amp: 200, freq: 0.00342, half: 58, narrow: 0.12, theme: 'nether', blocks: 4, holes: 2, gap: 245, foam: 3 },
-  { name: 'THE END',      len: LEN, amp: 214, freq: 0.00330, half: 56, narrow: 0.10, theme: 'end',    blocks: 5, holes: 2, gap: 260, foam: 4 },
+  { name: 'NIGHT CAVES',  len: LEN, amp: 168, freq: 0.00350, half: 68, narrow: 0.08, theme: 'night',  blocks: 3, holes: 2, gap: 230, foam: 1 },
+  { name: 'THE NETHER',   len: LEN, amp: 200, freq: 0.00342, half: 58, narrow: 0.12, theme: 'nether', blocks: 4, holes: 2, gap: 245, foam: 1 },
+  { name: 'THE END',      len: LEN, amp: 214, freq: 0.00330, half: 56, narrow: 0.10, theme: 'end',    blocks: 5, holes: 2, gap: 260, foam: 1 },
 ];
 
 /* Path centre line, in world x, for a given world y. Two harmonics
@@ -305,7 +305,6 @@ const HOLE_LEN = 74;              // how long a deck hole is along the path
 const SPAN_AT = 0.44;             // where the broken span sits on every level
 const PLANK_TH = 9;               // plank thickness
 const WALL_BACK = 190;            // how far past the span the foam wall stands
-const WALL_CD = 0.42;             // seconds between shoves into the wall
 
 /* Spread n positions evenly over a list of [from, to] ranges. */
 function slots(ranges, n) {
@@ -372,9 +371,8 @@ function buildLevel(L) {
 function buildFoam(L, gap) {
   const y = gap.y + gap.len + WALL_BACK;
   const cx = cxAt(y, L), hw = halfAt(y, L);
-  // The ball is stopped a ball-width short of the wall, so it can sit just
-  // outside the corridor at the wall's own y. Cover the whole span it can
-  // reach on the way in, a little past the kerb on each side.
+  // Cover the corridor over the stretch the ball can touch on its way in,
+  // a little past the kerb on each side, so there is no way around it.
   let x0 = Infinity, x1 = -Infinity;
   for (let yy = y - WALL_D / 2 - 2 * BALL_R; yy <= y + WALL_D / 2; yy += 2) {
     x0 = Math.min(x0, cxAt(yy, L) - halfAt(yy, L));
@@ -387,7 +385,7 @@ function buildFoam(L, gap) {
   for (let i = 0; i < nx; i++) {
     cells.push({ x: x0 + (i + 0.5) * cw, w: cw, tone: hash2(i * 4.3 + 0.7, 3.1) });
   }
-  return { y, cx, hw, nx, cw, cells, hp: L.foam, hpMax: L.foam, cd: 0, broken: false, chunks: [] };
+  return { y, cx, hw, nx, cw, cells, broken: false, chunks: [] };
 }
 const plankX = g => g.hinge + g.w / 2;
 const gapOpen = g => g.angle < 0.22;            // plank far enough down to roll onto
@@ -805,7 +803,7 @@ function drawBlocks() {
 }
 
 /* The foam wall: pale spongy Minecraft-ish blocks across the bridge. It
- * dims as it takes hits and bursts into tumbling cubes when it goes. */
+ * bursts into tumbling cubes the moment the ball rolls into it. */
 function drawFoam(th) {
   const fo = game.foam;
   if (!fo) return;
@@ -813,9 +811,8 @@ function drawFoam(th) {
   if (d0 > FOG_CULL + 240 || d0 < -280) return;
   const fm = PAL.foam;
   if (!fo.broken) {
-    const dam = fo.hpMax ? fo.hp / fo.hpMax : 1;      // 1 = fresh, lower = cracked
     for (const c of fo.cells) {
-      const k = (0.9 + c.tone * 0.22) * (0.6 + 0.4 * dam);
+      const k = 0.9 + c.tone * 0.22;
       box(c.x, fo.y, PATH_TOP, c.w, WALL_D, WALL_H,
         shade(fm[0], k * 1.06), shade(fm[1], k), shade(fm[2], k));
       // a lighter cap block, so each cell reads as its own foam brick
@@ -996,7 +993,7 @@ function startLevel() {
 /* Rolled into the foam wall hard enough: it bursts into cubes that tumble
  * off the bridge, and the way on is open. */
 function smashWall(fo) {
-  fo.broken = true; fo.hp = 0;
+  fo.broken = true;
   fo.chunks = [];
   for (const c of fo.cells) {
     for (let k = 0; k < 3; k++) {
@@ -1141,7 +1138,7 @@ function update(dt) {
     }
   }
 
-  // ---- the foam wall: shove into it until it bursts ----
+  // ---- the foam wall: one touch and the whole thing comes down ----
   const fo = game.foam;
   if (fo) {
     if (fo.broken) {
@@ -1151,26 +1148,11 @@ function update(dt) {
         c.vy -= 300 * dt; c.vz -= 900 * dt;         // foam tumbles off the edge
       }
       fo.chunks = fo.chunks.filter(c => c.life > 0 && c.z > -300);
-    } else {
-      const reach = fo.y - WALL_D / 2 - BALL_R - 1;
-      if (game.y > reach - 40) {
-        game.y = Math.min(game.y, reach);
-        game.scroll = Math.min(game.scroll, reach + 34);
-        // the player has to keep rolling into it for every shove: the foam
-        // gives, then springs back, so each hit needs a fresh push
-        const pressed = game.scroll > reach + 0.5;
-        fo.cd = Math.max(0, fo.cd - dt);
-        if (pressed) {
-          game.scroll = Math.max(reach + 3, game.scroll - 210 * dt);
-          if (fo.cd <= 0) {
-            fo.cd = WALL_CD;
-            fo.hp--;
-            bump(13);
-            beep(200 - (fo.hpMax - fo.hp) * 22, 0.22, 'square', 0.05, 90);
-            if (fo.hp <= 0) smashWall(fo);
-          }
-        }
-      }
+    } else if (game.y >= fo.y - WALL_D / 2 - BALL_R) {
+      // no shoving and no waiting: the ball keeps every bit of its speed
+      bump(13);
+      beep(190, 0.24, 'square', 0.05, 90);
+      smashWall(fo);
     }
   }
 
@@ -1322,7 +1304,7 @@ requestAnimationFrame(frame);
 /* Exposed for tests / tinkering from the console. */
 window.BLOCKYROLL = { game, LEVELS, LEN, level, cxAt, screenOf, project, cam, PATH_TOP, PAL, halfAt,
   buildLevel, buildFoam, plankX, gapOpen, overSpan, overHole, GAP, HOLE_LEN, SPAN_AT, BALL_R,
-  WALL_H, WALL_D, WALL_BACK, WALL_CD,
+  WALL_H, WALL_D, WALL_BACK,
   startLevel, restartGame, update, render, keys, THEMES, get ballScale() { return ballScale; } };
 
 
