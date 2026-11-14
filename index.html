@@ -4,6 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
 <title>BLOCKY ROLL — Roll the ball to the portal</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' fill='%235eb8ff'/%3E%3Crect x='6' y='18' width='20' height='6' fill='%23d8bd8a'/%3E%3Ccircle cx='16' cy='12' r='6' fill='%237fd23f'/%3E%3C/svg%3E">
 <style>
   * { margin: 0; padding: 0; box-sizing: border-box; }
   html, body {
@@ -821,7 +822,11 @@ function bump(strength) {
   UI.bumps.textContent = String(game.bumps);
   game.shake = Math.min(16, strength);
   beep(110 + Math.random() * 30, 0.09, 'square', 0.045, 70);
-  if (navigator.vibrate) { try { navigator.vibrate(18); } catch (e) {} }
+  // Haptics only once the player has actually interacted, otherwise the
+  // browser logs a blocked-call warning on every bump.
+  if (navigator.vibrate && (!navigator.userActivation || navigator.userActivation.hasBeenActive)) {
+    try { navigator.vibrate(18); } catch (e) {}
+  }
 }
 
 /* ============================ UPDATE ============================== */
