@@ -450,9 +450,10 @@ const BX = 26, BROW = 26;        // bridge block width / row spacing
 const WALL_H = BX * 2;           // foam wall: two Minecraft blocks tall
 const WALL_D = BX * 0.9;         // and one block deep along the path
 const KERB_H = 9;                // low kerb along the very edge of the deck
-const POST_H = 30;               // fence post above the kerb
-const RAIL_A = 13, RAIL_B = 25;  // height of the two fence rails above the kerb
-const RAIL_T = 5;                // rail thickness
+const BAR_LOW = 9;               // the lower railing bar, above the kerb
+const BAR_HIGH = 26;             // the top railing bar
+const BAR_T = 6;                 // how thick the bars are
+const BAR_STEP = 4;              // a vertical post every this many bridge blocks
 const CAM_LAG = 46;              // how far the camera may trail the ball sideways
 
 const cam = { x: 0, y: 0, z: 0, pitch: 0.4, cp: 1, sp: 0, foc: 600, hz: 0, shx: 0, shy: 0 };
@@ -773,6 +774,9 @@ function drawBridge(th, L) {
   const first = Math.floor(cam.y / BROW);
   const last = Math.ceil((cam.y + FOG_CULL) / BROW);
   const wood = PAL.wood;
+  // the railing bars, shaded once a frame instead of once a row
+  const iron = rgbOf('#8f97a1');
+  const barTop = shade(iron, 1.18), barSide = shade(iron, 0.98), barFront = shade(iron, 0.78);
   for (let r = first; r <= last; r++) {
     const y = r * BROW;
     if (y < -BROW) continue;
@@ -800,20 +804,20 @@ function drawBridge(th, L) {
       }
     }
 
-    // Railing along both edges: a low kerb, fences with two rails and a
-    // post every other row, all sitting flush on the outer deck block.
+    // Railing along both edges: a low wooden kerb with two thin iron bars
+    // above it and a post every few blocks, so the railing reads as bars
+    // instead of a solid fence.
     if (inGap) continue;
     const edge = half * BX + BX * 0.5;
-    const post = (r & 1) === 0;
     const kerb = shade(wood[1], 0.66);
+    const post = r % BAR_STEP === 0;
     for (const sideSign of [-1, 1]) {
       const wx = c + sideSign * (edge + BX * 0.5);
       box(wx, y, PATH_TOP, BX, BROW, KERB_H, wood[0], wood[1], kerb);
-      if (post) box(wx, y, PATH_TOP + KERB_H, BX, BROW, POST_H, wood[0], wood[1], shade(wood[2], 1.05));
-      box(wx, y, PATH_TOP + KERB_H + RAIL_A, BX * 0.5, BROW * 2, RAIL_T,
-        shade(wood[0], 1.08), wood[0], shade(wood[1], 0.9));
-      box(wx, y, PATH_TOP + KERB_H + RAIL_B, BX * 0.5, BROW * 2, RAIL_T,
-        shade(wood[0], 1.08), wood[0], shade(wood[1], 0.9));
+      box(wx, y, PATH_TOP + KERB_H + BAR_LOW, BX * 0.5, BROW * 2, BAR_T, barTop, barSide, barFront);
+      box(wx, y, PATH_TOP + KERB_H + BAR_HIGH, BX * 0.5, BROW * 2, BAR_T, barTop, barSide, barFront);
+      if (post) box(wx, y, PATH_TOP + KERB_H, BX * 0.5, BROW * 0.5, BAR_HIGH + BAR_T,
+        barTop, barSide, barFront);
     }
   }
 }
