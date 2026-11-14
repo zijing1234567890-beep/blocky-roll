@@ -718,7 +718,9 @@ function drawBall(th) {
   spot(game.x + r * 0.25, game.y + r * 0.3, PATH_TOP + 1.5, r * 1.02, 'rgba(0,0,0,.32)');
   if (d > FOG_CULL) return;
   const f = newFace();
-  f.d = d; f.kind = 3;
+  // The player must always see the ball: pull it a hair nearer so a block in
+  // the ball's own row (a few depth units closer) cannot paint over it.
+  f.d = d - 11; f.kind = 3;
   f.p[0] = game.x; f.p[1] = game.y; f.p[2] = z; f.p[3] = r;
   f.a = String(game.y / BALL_R);
 }
