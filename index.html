@@ -146,7 +146,7 @@
   <div id="barwrap"><div id="fill"></div></div>
 </div>
 
-<div id="hint">Hold <span style="color:#a6f56a">▲ ROLL</span> (<span style="color:#ffe57a">↑</span> / <span style="color:#ffe57a">W</span>) or scroll up to go forward &nbsp;·&nbsp; hold <span style="color:#a6f56a">▼ BACK</span> (<span style="color:#ffe57a">↓</span> / <span style="color:#ffe57a">S</span>) or scroll down to go back<br><span style="color:#a6f56a">← →</span> or <span style="color:#a6f56a">A / D</span> to steer &nbsp;·&nbsp; push the plank over the broken span &nbsp;·&nbsp; the foam wall collapses on one touch</div>
+<div id="hint">Hold <span style="color:#a6f56a">▲ ROLL</span> (<span style="color:#ffe57a">↑</span> / <span style="color:#ffe57a">W</span>) or scroll up to go forward &nbsp;·&nbsp; hold <span style="color:#a6f56a">▼ BACK</span> (<span style="color:#ffe57a">↓</span> / <span style="color:#ffe57a">S</span>) or scroll down to go back<br><span style="color:#a6f56a">← →</span> or <span style="color:#a6f56a">A / D</span> to steer &nbsp;·&nbsp; push the plank over the broken span &nbsp;·&nbsp; the foam wall collapses into blocks: <b>shove them off the edge</b> to get through</div>
 
 <div id="pad">
   <button class="pbtn" id="btnBack" aria-label="roll back, down arrow or S"><i>▼</i>BACK<span class="k">↓ / S</span></button>
@@ -158,7 +158,7 @@
 
 <div id="center">
   <h1>BLOCKY<span>ROLL</span></h1>
-  <p>Roll the slime ball along the floating<br>sky-bridge and through the nether portal at the end.<br>Every level is the same length — push the loose plank<br>down over the broken span and dodge what is left.<br>From level 4 a foam wall blocks the way: roll into it<br>and it bursts in one hit. Roll into the air and the level restarts.</p>
+  <p>Roll the slime ball along the floating<br>sky-bridge and through the nether portal at the end.<br>Every level is the same length — push the loose plank<br>down over the broken span and dodge what is left.<br>From level 4 a foam wall blocks the way: roll into it<br>and it collapses into foam blocks — shove them off the<br>edge with your ball to open a way through.<br>Roll into the air and the level restarts.</p>
   <p>Hold <b>▲ ROLL</b> — <span class="key">↑</span><span class="key">W</span> — or <b>SCROLL</b> up to go forward<br>hold <b>▼ BACK</b> — <span class="key">↓</span><span class="key">S</span> — or scroll down to go back &nbsp;·&nbsp; <span class="key">←</span><span class="key">→</span> or <span class="key">A</span><span class="key">D</span> to steer</p>
   <button id="startbtn">START ROLLING</button>
 </div>
@@ -316,7 +316,7 @@ const game = {
   level: 0, y: 0, scroll: 0, x: 0, vx: 0,
   camX: 0, camY: 0, shake: 0, time: 0,
   state: 'menu',           // menu | play | teleport | win | falling
-  stateT: 0, bumps: 0, bumpCd: 0,
+  stateT: 0, bumps: 0, bumpCd: 0, pushT: 0,
   blocks: [], holes: [], gap: null, foam: null, fallZ: 0,
 };
 
@@ -414,7 +414,7 @@ function buildFoam(L, gap) {
   for (let i = 0; i < nx; i++) {
     cells.push({ x: x0 + (i + 0.5) * cw, w: cw, tone: hash2(i * 4.3 + 0.7, 3.1) });
   }
-  return { y, cx, hw, nx, cw, cells, broken: false, chunks: [] };
+  return { y, cx, hw, nx, cw, cells, broken: false, blocks: [], chunks: [] };
 }
 const plankX = g => g.hinge + g.w / 2;
 const gapOpen = g => g.angle < 0.22;            // plank far enough down to roll onto
@@ -449,6 +449,8 @@ const FOG_START = 300, FOG_END = 1150, FOG_CULL = 1140;
 const BX = 26, BROW = 26;        // bridge block width / row spacing
 const WALL_H = BX * 2;           // foam wall: two Minecraft blocks tall
 const WALL_D = BX * 0.9;         // and one block deep along the path
+const FOAM_SHOVE = 1000;         // how hard the ball shoves a loose foam block
+const FOAM_VMAX = 190;           // top sideways speed of a shoved block
 const KERB_H = 9;                // low kerb along the very edge of the deck
 const BAR_LOW = 9;               // the lower railing bar, above the kerb
 const BAR_HIGH = 26;             // the top railing bar
@@ -806,8 +808,10 @@ function drawBridge(th, L) {
 
     // Railing along both edges: a low wooden kerb with two thin iron bars
     // above it and a post every few blocks, so the railing reads as bars
-    // instead of a solid fence.
-    if (inGap) continue;
+    // instead of a solid fence. The foam wall stands in a breach where the
+    // railing is missing, so its blocks can be shoved out over the edge.
+    const breach = game.foam && Math.abs(y - game.foam.y) < BROW * 1.6;
+    if (inGap || breach) continue;
     const edge = half * BX + BX * 0.5;
     const kerb = shade(wood[1], 0.66);
     const post = r % BAR_STEP === 0;
@@ -858,6 +862,13 @@ function drawFoam(th) {
     const k = clamp(c.life / 1.7, 0, 1);
     const col = shade(fm[0], 0.5 + 0.5 * k);
     box(c.x, c.y, c.z, c.s, c.s, c.s, col, shade(col, 0.86), shade(col, 0.94));
+  }
+  // the loose blocks left lying on the deck, until they are shoved off
+  for (const b of fo.blocks) {
+    if (b.gone) continue;
+    const k = 0.9 + b.tone * 0.22;
+    box(b.x, b.y, b.z, b.w, b.d, b.h,
+      shade(fm[0], k * 1.04), shade(fm[1], k * 0.98), shade(fm[2], k * 0.92));
   }
 }
 
@@ -1023,17 +1034,24 @@ function startLevel() {
     ' OBSTACLES  ·  A BROKEN SPAN' + (lv.foam ? '  ·  A FOAM WALL IN THE WAY' : ' TO PUSH DOWN'));
 }
 
-/* Rolled into the foam wall hard enough: it bursts into cubes that tumble
- * off the bridge, and the way on is open. */
+/* Roll into the foam wall and it collapses: the top half bursts into cubes
+ * that tumble away, the bottom half drops onto the deck as loose blocks.
+ * They stay there and block the way until they are shoved off the edge. */
 function smashWall(fo) {
   fo.broken = true;
   fo.chunks = [];
+  fo.blocks = [];
   for (const c of fo.cells) {
-    for (let k = 0; k < 3; k++) {
+    fo.blocks.push({
+      x: c.x, y: fo.y, w: c.w * 0.94, h: BROW * 0.86, d: WALL_D,
+      z: PATH_TOP + WALL_H - BROW * 0.5,          // drops down out of the wall
+      vx: 0, tone: c.tone, falling: 0, gone: false, shoved: false,
+    });
+    for (let k = 0; k < 2; k++) {
       fo.chunks.push({
         x: c.x + (Math.random() - 0.5) * c.w,
         y: fo.y + (Math.random() - 0.5) * WALL_D,
-        z: PATH_TOP + 6 + Math.random() * (WALL_H - 12),
+        z: PATH_TOP + BROW + Math.random() * (WALL_H - BROW - 6),
         vx: (Math.random() - 0.5) * 210,
         vy: 20 + Math.random() * 170,
         vz: 30 + Math.random() * 230,
@@ -1044,7 +1062,104 @@ function smashWall(fo) {
   }
   game.shake = 18;
   beep(320, 0.4, 'square', 0.06, 60);
-  toast('FOAM WALL SMASHED', 'ROLL ON — THE PORTAL IS AHEAD');
+  toast('FOAM WALL COLLAPSED', 'SHOVE THE BLOCKS OFF THE EDGE TO GET THROUGH');
+}
+
+/* How far out the deck reaches at this row; a block shoved past it tips
+ * over the edge and falls into the air. */
+function deckEdge(y, L) {
+  return Math.ceil(halfAt(y, L) / BX) * BX + BX * 0.5;
+}
+
+/* The loose foam blocks: they settle onto the deck, they hold the ball up,
+ * and they slide sideways when the ball rolls into them — nudged blocks
+ * shove their neighbours too, until the block goes over the edge. */
+function updateFoam(fo, dt, L) {
+  fo.pushSfx = Math.max(0, (fo.pushSfx || 0) - dt);
+
+  // ---- settle / slide ----
+  for (const b of fo.blocks) {
+    if (b.gone) continue;
+    if (b.falling > 0) {                            // over the edge: gone into the air
+      b.falling += dt;
+      b.z -= (90 + b.falling * 900) * dt;
+      b.x += b.vx * dt;
+      b.vx *= Math.exp(-dt * 1.2);
+      if (b.z < -700) b.gone = true;
+      continue;
+    }
+    if (b.z > PATH_TOP) b.z = Math.max(PATH_TOP, b.z - dt * 300);
+    if (Math.abs(b.vx) > 2) {
+      b.x += b.vx * dt;
+      b.vx *= Math.exp(-dt * 5.5);
+    } else b.vx = 0;
+  }
+
+  // ---- the ball shoves whatever it is touching ----
+  let touch = null, best = Infinity;
+  for (const b of fo.blocks) {
+    if (b.gone || b.falling > 0) continue;
+    if (Math.abs(game.y - b.y) >= b.h / 2 + BALL_R) continue;
+    const dx = game.x - b.x;
+    if (Math.abs(dx) >= b.w / 2 + BALL_R) continue;
+    if (Math.abs(dx) < best) { best = Math.abs(dx); touch = b; }
+  }
+  if (touch) {
+    const cx = cxAt(touch.y, L);
+    if (game.pushT > 0) {
+      // shoved away from the ball; head-on it goes toward the nearer edge
+      const dir = best > 2 ? -Math.sign(game.x - touch.x) : (touch.x >= cx ? 1 : -1);
+      touch.shoved = true;
+      touch.vx = clamp(touch.vx + dir * FOAM_SHOVE * dt, -FOAM_VMAX, FOAM_VMAX);
+      game.shake = Math.max(game.shake, 2.4);
+      if (fo.pushSfx <= 0) { beep(320, 0.07, 'triangle', 0.03, 190); fo.pushSfx = 0.15; }
+    }
+    // the block holds the ball up until a wide enough lane is clear
+    const hold = touch.y - touch.h / 2 - BALL_R;
+    if (game.y > hold) { game.y = hold; game.scroll = Math.min(game.scroll, hold); }
+  }
+
+  // ---- blocks push each other along the row ----
+  const live = fo.blocks.filter(b => !b.gone && b.falling === 0).sort((a, b) => a.x - b.x);
+  for (let i = 1; i < live.length; i++) {
+    const a = live[i - 1], b = live[i];
+    const want = (a.w + b.w) / 2;
+    const d = b.x - a.x;
+    if (d < want) {
+      const k = (want - d) / 2;
+      a.x -= k; b.x += k;
+      a.shoved = b.shoved = true;                  // pushed along by its neighbour
+      const m = (a.vx + b.vx) / 2;
+      a.vx = m; b.vx = m;
+    }
+  }
+
+  // ---- anything shoved past the deck edge tips over into the air ----
+  for (const b of live) {
+    if (b.shoved && Math.abs(b.x - cxAt(b.y, L)) > deckEdge(b.y, L) - b.w * 0.3) {
+      b.falling = 0.001;
+      beep(260, 0.22, 'sine', 0.045, 620);
+      game.shake = Math.max(game.shake, 9);
+    }
+  }
+  if (!live.length && !fo.cleared) {
+    fo.cleared = true;
+    toast('WAY CLEAR', 'ROLL ON — THE PORTAL IS AHEAD');
+  }
+}
+
+/* Is there anywhere across the foam row the ball can fit through? */
+function foamLaneClear(fo, L) {
+  const cx = cxAt(fo.y, L), reach = halfAt(fo.y, L) - BALL_R;
+  const blockers = fo ? fo.blocks.filter(b => !b.gone && b.falling === 0)
+    .map(b => [b.x - b.w / 2 - BALL_R, b.x + b.w / 2 + BALL_R])
+    .sort((a, b) => a[0] - b[0]) : [];
+  let cursor = cx - reach;
+  for (const [a, b] of blockers) {
+    if (a - cursor > 0.5) return true;
+    cursor = Math.max(cursor, b);
+  }
+  return (cx + reach) - cursor > 0.5;
 }
 
 /* Rolled into the air: the ball drops out of the sky and the level starts
@@ -1146,6 +1261,10 @@ function update(dt) {
   game.scroll = clamp(game.scroll, 0, L.len + 40);
   game.y = clamp(lerp(game.y, game.scroll, Math.min(1, dt * 15)), 0, L.len + 40);
 
+  // a shove only counts while the player is actually rolling forward
+  game.pushT = Math.max(0, game.pushT - dt);
+  if (keys.fwd) game.pushT = 0.28;
+
   // ---- steering ----
   let ax = 0;
   if (keys.left) ax -= 1;
@@ -1175,7 +1294,7 @@ function update(dt) {
     }
   }
 
-  // ---- the foam wall: one touch and the whole thing comes down ----
+  // ---- the foam wall: one touch brings it down into blocks you shove aside ----
   const fo = game.foam;
   if (fo) {
     if (fo.broken) {
@@ -1185,11 +1304,14 @@ function update(dt) {
         c.vy -= 300 * dt; c.vz -= 900 * dt;         // foam tumbles off the edge
       }
       fo.chunks = fo.chunks.filter(c => c.life > 0 && c.z > -300);
+      updateFoam(fo, dt, L);
     } else if (game.y >= fo.y - WALL_D / 2 - BALL_R) {
-      // no shoving and no waiting: the ball keeps every bit of its speed
+      // the collapse itself never slows the ball down; the blocks it leaves
+      // behind are what stop it
       bump(13);
       beep(190, 0.24, 'square', 0.05, 90);
       smashWall(fo);
+      updateFoam(fo, dt, L);
     }
   }
 
@@ -1274,6 +1396,7 @@ function scrollInput(dy) {
   if (game.state !== 'play') return;
   const L = level();
   game.scroll = clamp(game.scroll + dy, 0, L.len + 40);
+  if (dy > 0) game.pushT = 0.28;              // scrolling up also shoves foam blocks
   UI.hint.classList.add('dim');
 }
 
@@ -1371,7 +1494,7 @@ requestAnimationFrame(frame);
 /* Exposed for tests / tinkering from the console. */
 window.BLOCKYROLL = { game, LEVELS, LEN, level, cxAt, screenOf, project, cam, PATH_TOP, PAL, halfAt,
   buildLevel, buildFoam, plankX, gapOpen, overSpan, overHole, GAP, HOLE_LEN, SPAN_AT, BALL_R,
-  WALL_H, WALL_D, WALL_BACK,
+  WALL_H, WALL_D, WALL_BACK, deckEdge, foamLaneClear, smashWall,
   startLevel, restartGame, update, render, keys, THEMES, get ballScale() { return ballScale; } };
 
 
